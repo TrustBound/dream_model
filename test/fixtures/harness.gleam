@@ -178,7 +178,10 @@ fn flip(checked: Result(Nil, String)) -> Result(String, Nil) {
 }
 
 /// Every `Option` parameter must accept NULL: the run with NULL in its
-/// place must not fail with a NOT NULL, CHECK or trigger error.
+/// place must not fail with a NOT NULL, CHECK or trigger error. The run
+/// with the base parameters must pass first; otherwise the error does not
+/// come from the NULL, for example an INSERT that leaves out a NOT NULL
+/// column.
 fn check_parameters(
   connection: wire.Connection,
   analysis: Analysis,
@@ -191,6 +194,23 @@ fn check_parameters(
     [] -> list.repeat(Some("1"), list.length(analysis.parameters))
     _ -> base
   }
+  let base_run = run(connection, sql, data_set.1, base, reset)
+  rollback(connection)
+  case base_run {
+    Ok(_) ->
+      check_null_parameters(connection, analysis, sql, data_set, base, reset)
+    Error(_) -> []
+  }
+}
+
+fn check_null_parameters(
+  connection: wire.Connection,
+  analysis: Analysis,
+  sql: String,
+  data_set: #(String, String),
+  base: List(Option(String)),
+  reset: String,
+) -> List(String) {
   analysis.parameters
   |> list.filter(fn(parameter) { parameter.optional })
   |> list.filter_map(fn(parameter) {

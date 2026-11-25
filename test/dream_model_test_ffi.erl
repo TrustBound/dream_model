@@ -1,8 +1,9 @@
-%% Helpers for the tests: environment variables, and a fake PostgreSQL
-%% server that follows a script, for the protocol cases that a real server
-%% never sends.
+%% Helpers for the tests: environment variables, command-line arguments,
+%% JSON decoding, the clock, and a fake PostgreSQL server that follows a
+%% script, for the protocol cases that a real server never sends.
 -module(dream_model_test_ffi).
--export([get_env/1, start_fake_server/1, run/4]).
+-export([get_env/1, get_arguments/0, decode_json/1, monotonic_milliseconds/0,
+         start_fake_server/1, run/4]).
 
 %% Runs a program found on the PATH in a folder, with more environment
 %% variables, and returns its exit status and its output.
@@ -28,6 +29,21 @@ get_env(Name) ->
         false -> {error, nil};
         Value -> {ok, unicode:characters_to_binary(Value)}
     end.
+
+%% Returns the command-line arguments after `--`.
+get_arguments() ->
+    [unicode:characters_to_binary(Argument) || Argument <- init:get_plain_arguments()].
+
+%% Decodes JSON text with the json module of Erlang/OTP 27 and newer.
+decode_json(Text) ->
+    try json:decode(Text) of
+        Value -> {ok, Value}
+    catch
+        _:_ -> {error, nil}
+    end.
+
+monotonic_milliseconds() ->
+    erlang:monotonic_time(millisecond).
 
 %% Starts a server on a free local port that accepts one connection for
 %% each script and runs the script on it. Returns the port.
