@@ -83,8 +83,9 @@ create table sized_events_b partition of sized_events (label not null) for value
 /// casts of a parameter, a generated column, a partition key, a view WITH
 /// CHECK OPTION, a view with an INSTEAD OF trigger, whole-row and
 /// column-free CHECK constraints, and foreign tables of postgres_fdw over
-/// the same database: a foreign table, a foreign child table and a foreign
-/// partition. The foreign rows are committed, so a rolled-back run sees
+/// the same database: a foreign table, a foreign table with a NOT NULL
+/// column and a CHECK (which PostgreSQL does not enforce on a foreign
+/// table), a foreign child table and a foreign partition. The foreign rows are committed, so a rolled-back run sees
 /// them.
 pub const schema_review =
   "
@@ -117,6 +118,7 @@ create table remote_source (id int, note text);
 insert into remote_source values (null, null);
 create table remote_parts (id int, kind text, note text not null);
 create foreign table remote_notes (id int, note text) server loopback options (table_name 'remote_source');
+create foreign table remote_checked (id int not null, note text check (note <> '')) server loopback options (table_name 'remote_source');
 create table fparent (id int not null, note text);
 create foreign table fchild () inherits (fparent) server loopback options (table_name 'remote_source');
 create table fpart (id int not null, kind text not null, note text) partition by list (kind);
