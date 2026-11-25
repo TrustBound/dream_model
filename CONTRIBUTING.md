@@ -31,6 +31,16 @@ The end-to-end tests copy `e2e/model_app` to `build/e2e/<version>/model_app`, ge
 
 When a change to the generator changes the generated code on purpose, copy the new modules from `build/e2e/16/model_app/src/app/models` to `e2e/model_app/src/app/models` after a run on PostgreSQL 16.
 
+## Run the mutation test
+
+`sh scripts/mutation-test.sh` (or `make mutation-test`) proves that the tests fail when a rule is switched off. Each mutant in the script changes one exact text in one source file, and names its PostgreSQL versions and the test files that kill it.
+
+1. A worker applies the change to its own copy of the repository and compiles it once for all versions of the mutant.
+2. The test modules of the mutant run first. When they pass, every test runs. When only the run of every test kills the mutant, the script prints a warning with the test modules that killed it: add them to the mutant.
+3. `--jobs N` runs N workers at the same time (default 3). Each worker uses its own database names (the prefix `mutation_w<N>_`) and drops its databases at the end.
+
+The results are in `scripts/mutation-results.tsv`. A run skips a mutant whose result is "killed" and whose hash still matches. The hash covers the function (or constant) that the change is in and the test files of the mutant, so a change to another function of the same file does not run the mutant again. `--all` runs every mutant, as the nightly workflow does. Commit the results file after a run.
+
 ## Write the docs
 
 Every code block in the README, the guides, the doc comments, the changelog and the release notes is a copy of a tested file. `gleam run -m dream_snippets` checks each block against its file.
