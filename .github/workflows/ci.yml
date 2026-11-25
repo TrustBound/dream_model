@@ -50,6 +50,29 @@ jobs:
       - name: Download dependencies
         run: gleam deps download
 
+      # The end-to-end tests build the app of e2e/model_app in a copy at
+      # build/e2e/model_app, and they use the packages in
+      # build/e2e/model_app/build/packages. Keep these packages between runs
+      # too, so that the download below asks Hex only when
+      # e2e/model_app/manifest.toml changes.
+      - name: Restore the packages of the end-to-end app
+        id: e2e-packages
+        uses: actions/cache/restore@v4
+        with:
+          path: build/e2e/model_app/build/packages
+          key: e2e-packages-${{ runner.os }}-gleam${{ env.GLEAM_VERSION }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('e2e/model_app/gleam.toml', 'e2e/model_app/manifest.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            e2e-packages-${{ runner.os }}-gleam${{ env.GLEAM_VERSION }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('e2e/model_app/gleam.toml', 'e2e/model_app/manifest.toml') }}-
+            e2e-packages-${{ runner.os }}-gleam${{ env.GLEAM_VERSION }}-otp${{ env.OTP_VERSION }}-
+
+      - name: Download the packages of the end-to-end app
+        # scripts/e2e-packages.sh puts the dream_model of this checkout into
+        # the packages of the app, because the app tests this code and not
+        # a release on Hex. Then it runs `gleam deps download` in the copy
+        # of the app for the other packages (Dream, dream_postgres and
+        # their dependencies).
+        run: sh scripts/e2e-packages.sh
+
       - name: Check native coverage support
         # Coverage counts lines with the native line counters of the BEAM,
         # which need Erlang/OTP 27 or later with the JIT.
@@ -129,6 +152,13 @@ jobs:
         with:
           path: build/packages
           key: ${{ steps.gleam-packages.outputs.cache-primary-key }}
+
+      - name: Save the packages of the end-to-end app
+        if: always() && steps.e2e-packages.outputs.cache-primary-key != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/e2e/model_app/build/packages
+          key: ${{ steps.e2e-packages.outputs.cache-primary-key }}
 
   coverage-badge:
     name: Publish coverage badge

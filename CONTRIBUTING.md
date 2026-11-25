@@ -10,6 +10,8 @@ dream_model needs dream_postgres 2.1.0. The end-to-end app in `e2e/model_app` al
 
 The script copies each package into `build/packages` and into `build/e2e/model_app/build/packages`, and lists it in `packages.toml`. Gleam then makes no Hex request for these packages. `manifest.toml` and `e2e/model_app/manifest.toml` hold the entries of the unpublished packages, with a checksum of zeros.
 
+CI runs `sh scripts/e2e-packages.sh` for the end-to-end app. It puts the dream_model of the checkout into the packages of the app and downloads the other packages from Hex, so it works when dream_postgres 2.1.0 and Dream 3.0.0 are on Hex.
+
 When both packages are on Hex, remove `scripts/stand-ins.sh` and this section, and run `gleam deps update dream_postgres` here and `gleam deps update dream dream_postgres dream_model` in `e2e/model_app`, to write the real checksums.
 
 ## Run the tests
