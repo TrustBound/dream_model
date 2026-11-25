@@ -61,17 +61,16 @@ type Record {
 /// The names of the helpers that a generated module can hold.
 pub const helper_names = [
   "one_row", "single_row", "maybe_row", "optional_row", "many_rows", "no_rows",
-  "query_error_to_error", "unique_message", "schema_fingerprint",
+  "query_error_to_error", "unique_violation", "schema_fingerprint",
 ]
 
 /// The aliases of the modules that a generated module can import, besides
 /// the modules of other models.
-pub const standard_aliases = ["client", "decode", "error", "option", "result"]
+pub const standard_aliases = ["client", "decode", "option", "result"]
 
 /// The type and constructor names that a type of the module itself cannot
 /// take: the types and constructors of the Gleam prelude, and the names
-/// that the module imports without a module (`Error`, `Option`, `Some`,
-/// `None`). A record type gives a constructor of its own name, so each
+/// that the module imports without a module (`Option`, `Some`, `None`). A record type gives a constructor of its own name, so each
 /// of them would shadow one that the module uses.
 pub const reserved_type_names = [
   "BitArray", "Bool", "Error", "False", "Float", "Int", "List", "Nil", "None",
@@ -352,10 +351,7 @@ fn render_imports(unit: Unit, imports: List(#(String, String))) -> String {
     False -> None
   }
   list.map(imports, fn(entry) { "import " <> entry.0 })
-  |> list.append([
-    "import dream/http/error.{type Error}",
-    "import dream_postgres/client",
-  ])
+  |> list.append(["import dream_postgres/client"])
   |> list.append(option.values([decode_import]))
   |> list.append(option.values([option_import, result_import]))
   |> list.sort(string.compare)
@@ -788,7 +784,7 @@ fn render_function(
           <> arguments
           <> ") -> Result("
           <> return_type_text(unit, found, records)
-          <> ", Error) {",
+          <> ", client.ModelQueryError) {",
         "  " <> string_literal(found.sql),
         "  |> client.query",
       ],
@@ -849,20 +845,9 @@ fn helper_of(found: Query) -> String {
 fn helper_call(unit: Unit, found: Query) -> String {
   let query_name =
     string_literal(module_alias(unit.model.module) <> "." <> found.function)
-  let unique =
-    list.map(found.unique, fn(unique) {
-      "#("
-      <> string_literal(unique.constraint)
-      <> ", "
-      <> string_literal(unique.message)
-      <> ")"
-    })
-  let unique_list = "[" <> string.join(unique, ", ") <> "]"
-  let arguments = case found.returns {
-    ReturnsOne -> [query_name, string_literal(found.not_found), unique_list]
-    _ -> [query_name, unique_list]
-  }
-  helper_of(found) <> "(" <> string.join(arguments, ", ") <> ")"
+  let unique_list =
+    "[" <> string.join(list.map(found.unique, string_literal), ", ") <> "]"
+  helper_of(found) <> "(" <> query_name <> ", " <> unique_list <> ")"
 }
 
 // --- The fingerprint -------------------------------------------------------
@@ -902,11 +887,10 @@ const one_row_helper =
   "fn one_row(
   executed: Result(client.Returned(row), client.QueryError),
   query_name: String,
-  not_found: String,
-  unique: List(#(String, String)),
-) -> Result(row, Error) {
+  unique: List(String),
+) -> Result(row, client.ModelQueryError) {
   case executed {
-    Ok(returned) -> single_row(returned.rows, query_name, not_found)
+    Ok(returned) -> single_row(returned, query_name)
     Error(query_error) ->
       Error(query_error_to_error(query_error, query_name, unique))
   }
@@ -914,14 +898,17 @@ const one_row_helper =
 
 const single_row_helper =
   "fn single_row(
-  rows: List(row),
+  returned: client.Returned(row),
   query_name: String,
-  not_found: String,
-) -> Result(row, Error) {
-  case rows {
+) -> Result(row, client.ModelQueryError) {
+  case returned.rows {
     [row] -> Ok(row)
-    [] -> Error(error.NotFound(not_found))
-    _ -> Error(error.InternalServerError(query_name <> \" returned more than one row\"))
+    [] -> Error(client.NotFound)
+    _ ->
+      Error(client.QueryFailed(
+        query_name <> \" returned more than one row\",
+        client.more_than_one_row(returned.count),
+      ))
   }
 }"
 
@@ -929,10 +916,10 @@ const maybe_row_helper =
   "fn maybe_row(
   executed: Result(client.Returned(row), client.QueryError),
   query_name: String,
-  unique: List(#(String, String)),
-) -> Result(Option(row), Error) {
+  unique: List(String),
+) -> Result(Option(row), client.ModelQueryError) {
   case executed {
-    Ok(returned) -> optional_row(returned.rows, query_name)
+    Ok(returned) -> optional_row(returned, query_name)
     Error(query_error) ->
       Error(query_error_to_error(query_error, query_name, unique))
   }
@@ -940,13 +927,17 @@ const maybe_row_helper =
 
 const optional_row_helper =
   "fn optional_row(
-  rows: List(row),
+  returned: client.Returned(row),
   query_name: String,
-) -> Result(Option(row), Error) {
-  case rows {
+) -> Result(Option(row), client.ModelQueryError) {
+  case returned.rows {
     [] -> Ok(None)
     [row] -> Ok(Some(row))
-    _ -> Error(error.InternalServerError(query_name <> \" returned more than one row\"))
+    _ ->
+      Error(client.QueryFailed(
+        query_name <> \" returned more than one row\",
+        client.more_than_one_row(returned.count),
+      ))
   }
 }"
 
@@ -954,8 +945,8 @@ const many_rows_helper =
   "fn many_rows(
   executed: Result(client.Returned(row), client.QueryError),
   query_name: String,
-  unique: List(#(String, String)),
-) -> Result(List(row), Error) {
+  unique: List(String),
+) -> Result(List(row), client.ModelQueryError) {
   executed
   |> result.map(fn(returned) { returned.rows })
   |> result.map_error(query_error_to_error(_, query_name, unique))
@@ -965,8 +956,8 @@ const no_rows_helper =
   "fn no_rows(
   executed: Result(client.Returned(row), client.QueryError),
   query_name: String,
-  unique: List(#(String, String)),
-) -> Result(Nil, Error) {
+  unique: List(String),
+) -> Result(Nil, client.ModelQueryError) {
   executed
   |> result.replace(Nil)
   |> result.map_error(query_error_to_error(_, query_name, unique))
@@ -976,28 +967,29 @@ const query_error_helper =
   "fn query_error_to_error(
   query_error: client.QueryError,
   query_name: String,
-  unique: List(#(String, String)),
-) -> Error {
-  let conflict = unique_message(client.violated_constraint(query_error), unique)
+  unique: List(String),
+) -> client.ModelQueryError {
+  let conflict =
+    unique_violation(client.violated_constraint(query_error), unique)
   let promise = client.broken_promise(query_error)
   let infinite = client.infinite_value(query_error)
   case conflict, promise, infinite {
-    Ok(message), _, _ -> error.Conflict(message)
-    Error(Nil), Ok(message), _ -> error.InternalServerError(message)
+    Ok(constraint), _, _ -> client.Conflict(constraint)
+    Error(Nil), Ok(message), _ -> client.QueryFailed(message, query_error)
     Error(Nil), Error(Nil), Ok(message) ->
-      error.InternalServerError(query_name <> \": \" <> message)
+      client.QueryFailed(query_name <> \": \" <> message, query_error)
     Error(Nil), Error(Nil), Error(Nil) ->
-      error.InternalServerError(query_name <> \" failed\")
+      client.QueryFailed(query_name <> \" failed\", query_error)
   }
 }
 
-fn unique_message(
+fn unique_violation(
   constraint: Result(String, Nil),
-  unique: List(#(String, String)),
+  unique: List(String),
 ) -> Result(String, Nil) {
   case constraint, unique {
-    Ok(violated), [#(name, message), ..] if name == violated -> Ok(message)
-    Ok(_), [_, ..rest] -> unique_message(constraint, rest)
+    Ok(violated), [name, ..] if name == violated -> Ok(violated)
+    Ok(_), [_, ..rest] -> unique_violation(constraint, rest)
     _, _ -> Error(Nil)
   }
 }"

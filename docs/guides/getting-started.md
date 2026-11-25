@@ -22,13 +22,13 @@ In this guide you:
 
 - Write `find.sql`, `create.sql` and `count.sql` in `src/app/models/user`.
 - Generate `src/app/models/user.gleam`, with a `User` type and one function for each file.
-- Answer a request with the user, or with a 404 when there is no user.
+- Answer a request with the user, or with a 404 when there is no user, and with a 409 when an email is taken.
 - Stop the app at start-up when the schema changed after the generation.
 - Fail CI when a module differs from its `.sql` files.
 
 ## Before you start
 
-Add dream_model as a dev dependency. The app also needs `dream` and `dream_postgres`:
+Add dream_model as a dev dependency. The app also needs `dream` and `dream_postgres`. The generated modules use only `dream_postgres`, and the controllers use `dream`:
 
 ### The dev dependency of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L13-L14"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -65,22 +65,21 @@ Put the files of a model in one folder under `src`. The name of the folder is th
 
 ```sql
 -- returns: one User
--- not found: User not found
 select id, email, nickname from users where id = $1
 ```
 
-`returns: one User` says that the statement gives one row, as the type `User`. `not found` gives the text of the 404 when there is no row.
+`returns: one User` says that the statement gives one row, as the type `User`. When there is no row, the function gives `client.NotFound`.
 
 ### Create a user <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user/create.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```sql
 -- returns: one User
--- unique users_email_key: Email already taken
+-- unique: users_email_key
 insert into users (email, nickname) values ($1, $2)
 returning id, email, nickname
 ```
 
-`unique users_email_key` turns a violation of that unique constraint into a 409 with the text `Email already taken`.
+`unique: users_email_key` turns a violation of that unique constraint into `client.Conflict("users_email_key")`. The hint holds no text for a user: the controller writes it.
 
 ### Count the users <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user/count.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -105,7 +104,7 @@ The command writes `src/app/models/user.gleam` and prints `wrote src/app/models/
 
 The module starts with the record type. Each file that returns `User` must give it the same fields:
 
-### The generated type <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L20-L23"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The generated type <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L19-L22"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// A row of create.sql, find.sql, find_by_email.sql, list.sql and search.sql.
@@ -118,21 +117,24 @@ pub type User {
 
 Each `.sql` file gives one function. Its first argument is the connection, and the other arguments are the parameters of the statement:
 
-### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L80-L88"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L80-L91"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from find.sql.
-pub fn find(db: client.Connection, id: Int) -> Result(User, Error) {
+pub fn find(
+  db: client.Connection,
+  id: Int,
+) -> Result(User, client.ModelQueryError) {
   "select id, email, nickname from users where id = $1"
   |> client.query
   |> client.parameter(client.int(id))
   |> client.returning(user_decoder())
   |> client.execute(db)
-  |> one_row("user.find", "User not found", [])
+  |> one_row("user.find", [])
 }
 ```
 
-### The function of create.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L34-L50"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The function of create.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L33-L47"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from create.sql.
@@ -140,7 +142,7 @@ pub fn create(
   db: client.Connection,
   email: String,
   nickname: Option(String),
-) -> Result(User, Error) {
+) -> Result(User, client.ModelQueryError) {
   "insert into users (email, nickname) values ($1, $2)
 returning id, email, nickname"
   |> client.query
@@ -148,9 +150,7 @@ returning id, email, nickname"
   |> client.parameter(client.nullable(client.text, nickname))
   |> client.returning(user_decoder())
   |> client.execute(db)
-  |> one_row("user.create", "User not found", [
-    #("users_email_key", "Email already taken"),
-  ])
+  |> one_row("user.create", ["users_email_key"])
 }
 ```
 
@@ -158,9 +158,9 @@ returning id, email, nickname"
 
 ## Step 3: Call the model from a controller
 
-Each function returns `Result(row, dream/http/error.Error)`. `error.to_status_code` and `error.message` give the status and the text of the error:
+Each function returns `Result(row, client.ModelQueryError)`. The error is data: `NotFound`, `Conflict(constraint)` or `QueryFailed(message, cause)`. The controller picks the status and the text of each case:
 
-### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L9-L17"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L10-L38"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Answers with the email of the user, or with the status and the message
@@ -168,19 +168,40 @@ Each function returns `Result(row, dream/http/error.Error)`. `error.to_status_co
 pub fn show(db: client.Connection, id: Int) -> Response {
   case user.find(db, id) {
     Ok(found) -> text_response(200, found.email)
-    Error(problem) ->
-      text_response(error.to_status_code(problem), error.message(problem))
+    Error(error) -> error_response(error)
+  }
+}
+
+/// Creates a user and answers with the email, or with a 409 when the email
+/// is taken.
+pub fn create(db: client.Connection, email: String) -> Response {
+  case user.create(db, email, None) {
+    Ok(created) -> text_response(201, created.email)
+    Error(error) -> error_response(error)
+  }
+}
+
+/// The status and the text of each model error.
+fn error_response(error: client.ModelQueryError) -> Response {
+  case error {
+    client.NotFound -> text_response(404, "User not found")
+    client.Conflict("users_email_key") ->
+      text_response(409, "Email already taken")
+    client.Conflict(constraint:) ->
+      text_response(409, "Conflict on " <> constraint)
+    client.QueryFailed(message:, cause: _) -> text_response(500, message)
   }
 }
 ```
 
-For user 1, the answer is 200 with the email. For a missing user, the answer is 404 with `User not found`:
+For user 1, the answer is 200 with the email. For a missing user, the answer is 404 with `User not found`. For a taken email, the answer is 409 with `Email already taken`:
 
-### What the controller answers <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L20-L21"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What the controller answers <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L20-L22"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 | user_controller.show: 200 Text("ann@example.com")
 | user_controller.show of a missing user: 404 Text("User not found")
+| user_controller.create of a taken email: 409 Text("Email already taken")
 ```
 
 The [Errors](errors.md) guide gives every error and its text.
@@ -205,7 +226,7 @@ pub fn check_models(db: client.Connection) -> Result(Nil, String) {
 
 When a migration changed a table after the generation, `check_models` returns an error. Stop the app with that message, and generate the modules again:
 
-### The message after a new column <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L52"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The message after a new column <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L53"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 | startup.check_models after a new column: Error("The database schema changed after dream_model generated these modules. Regenerate them with dream_model:")

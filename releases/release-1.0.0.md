@@ -2,13 +2,13 @@
 
 **Release Date:** Unreleased
 
-This is the first release of dream_model. It writes the model modules of a Dream app from PostgreSQL `.sql` files. You write one `.sql` file for each query. dream_model analyzes each statement against your database and writes one typed Gleam module for each model folder. Each function returns a Dream error, so a controller gives the result straight to the client.
+This is the first release of dream_model. It writes the model modules of a Dream app from PostgreSQL `.sql` files. You write one `.sql` file for each query. dream_model analyzes each statement against your database and writes one typed Gleam module for each model folder. Each function returns its error as data, `ModelQueryError` of `dream_postgres/client`, and the controllers of the app map it to a response.
 
 ## Key Highlights
 
 - **One `.sql` file, one typed function**: a record type for the rows, and the parameters as arguments
 - **`Option` only where a value can be NULL**: dream_model reads the schema and the analyzed query tree of PostgreSQL
-- **Dream errors**: `NotFound` (404), `Conflict` (409) and `InternalServerError` (500), with clear texts
+- **Data errors**: `NotFound`, `Conflict(constraint)` and `QueryFailed(message, cause)`, with no HTTP status. The generated code imports no Dream module
 - **`--check` in CI and a schema fingerprint at start-up**: catch a changed `.sql` file and a changed table
 
 ## What's New
@@ -21,23 +21,25 @@ Put the `.sql` files of a model in one folder under `src`. The comment lines at 
 
 ```sql
 -- returns: one User
--- not found: User not found
 select id, email, nickname from users where id = $1
 ```
 
 `gleam run -m dream_model` writes `src/app/models/user.gleam`:
 
-#### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L80-L88"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L80-L91"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from find.sql.
-pub fn find(db: client.Connection, id: Int) -> Result(User, Error) {
+pub fn find(
+  db: client.Connection,
+  id: Int,
+) -> Result(User, client.ModelQueryError) {
   "select id, email, nickname from users where id = $1"
   |> client.query
   |> client.parameter(client.int(id))
   |> client.returning(user_decoder())
   |> client.execute(db)
-  |> one_row("user.find", "User not found", [])
+  |> one_row("user.find", [])
 }
 ```
 
@@ -47,13 +49,13 @@ A result column is `Option` unless a rule proves that it is never NULL: a NOT NU
 
 ### Hints
 
-`returns`, `not found`, `unique`, `not null`, `not null elements`, `nullable` and `params`, in the comment block at the top of a file. A type name or a parameter name that the generated module uses itself is refused with the file and the line. A `unique` hint is refused at generation time when another index or constraint of the database has the same name, because PostgreSQL names a violation only by its constraint name.
+`returns`, `unique`, `not null`, `not null elements`, `nullable` and `params`, in the comment block at the top of a file. A hint holds no text for a user: `-- unique: users_email_key` names only the constraint. The old forms `-- unique <name>: <message>` and `-- not found: <text>` are refused with the new form in the message. A type name or a parameter name that the generated module uses itself is refused with the file and the line. A `unique` hint is refused at generation time when another index or constraint of the database has the same name, because PostgreSQL names a violation only by its constraint name.
 
 ### Exact numbers, arrays and infinity
 
 A `numeric` is a `String`: the exact text of the number, so `1.50` stays `"1.50"`, and `NaN`, `Infinity` and `-Infinity` come through. A `numeric` parameter is sent as text, and PostgreSQL parses it. A `numeric[]` parameter is refused at generation time: write `$1::text[]::numeric[]` in the SQL.
 
-#### An exact round trip <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L37"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### An exact round trip <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L38"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 | sample.echo_amount of 1.50: Ok(#("1.50", True))
@@ -61,18 +63,18 @@ A `numeric` is a `String`: the exact text of the number, so `1.50` stays `"1.50"
 
 An array is `List(Option(T))`, because PostgreSQL never forbids a NULL element. The `-- not null elements: tags` hint gives `List(T)`, and the generated code checks each row:
 
-#### A NULL element breaks the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L47"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### A NULL element breaks the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L48"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-| sample.tags with a NULL element: 500 the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL
+| sample.tags with a NULL element: QueryFailed the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL (cause: UnexpectedResultType)
 ```
 
-A `timestamp`, `timestamptz` or `date` value of `infinity` gives a 500 with a message that names the function, the column and the Gleam type:
+A `timestamp`, `timestamptz` or `date` value of `infinity` gives `QueryFailed` with a message that names the function, the column and the Gleam type:
 
-#### The message of an infinite timestamp <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L34"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The message of an infinite timestamp <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L35"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-| sample.get of an infinite timestamp: 500 sample.get: the column happened_at holds infinity, which the Gleam type Timestamp cannot hold
+| sample.get of an infinite timestamp: QueryFailed sample.get: the column happened_at holds infinity, which the Gleam type Timestamp cannot hold (cause: UnexpectedResultType)
 ```
 
 ### CI and schema drift
@@ -95,8 +97,8 @@ pub fn check_models(db: client.Connection) -> Result(Nil, String) {
 
 ## Testing
 
-- The full test run on PostgreSQL 16, 17, 18 and 19: 2833 tests, 0 failed, 100.0% line coverage (2304 of 2304 lines). The run took 1 minute 28 seconds of wall time, and the runners report 9 minutes 23 seconds of test time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
-- The long fuzz runs analyzed 20,809 random queries on PostgreSQL 16 to 19 with 0 failures, and the mutation test killed each of its 67 mutants
+- The full test run on PostgreSQL 16, 17, 18 and 19: 2832 tests, 0 failed, 100.0% line coverage (2273 of 2273 lines). The run took 1 minute 27 seconds of wall time, and the runners report 8 minutes 52 seconds of test time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The long fuzz runs analyzed 20,809 random queries on PostgreSQL 16 to 19 with 0 failures, and the mutation test killed each of its 73 mutants
 - The attack tests analyze each statement and then run it on several data sets: a column typed never NULL must never return NULL, and each `Option` parameter must accept NULL
 - The end-to-end tests generate the models of `e2e/model_app` on each version, compare them with the checked-in modules, run them against the database, and compare the output
 

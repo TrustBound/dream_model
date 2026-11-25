@@ -608,6 +608,38 @@ mutant "unique hint: refuse an ambiguous name" "16" "$generator_query" \
   'case descriptions_of(rows, "none") {' \
   "test/dream_model/generator/query_test.gleam"
 
+# --- Model errors as data ------------------------------------------------------
+
+mutant "model error: no row is NotFound" "16" "$model" \
+  '[] -> Error(client.NotFound)' \
+  '[] -> Ok(panic)' \
+  "test/dream_model/generator/model_test.gleam"
+
+mutant "model error: a hinted unique violation is Conflict" "16" "$model" \
+  'Ok(constraint), _, _ -> client.Conflict(constraint)' \
+  'Ok(constraint), _, _ -> client.QueryFailed(constraint, query_error)' \
+  "test/dream_model/generator/model_test.gleam"
+
+mutant "model error: QueryFailed keeps the cause" "16" "$model" \
+  'client.QueryFailed(query_name <> \" failed\", query_error)' \
+  'client.QueryFailed(query_name <> \" failed\", client.more_than_one_row(0))' \
+  "test/dream_model/generator/model_test.gleam"
+
+mutant "model error: unique hints reach the helper" "16" "$model" \
+  '"[" <> string.join(list.map(found.unique, string_literal), ", ") <> "]"' \
+  '"[]"' \
+  "test/dream_model/e2e_test.gleam e2e/model_app/src/app/models/user.gleam e2e/model_app/src/app/models/sample.gleam"
+
+mutant "model error hints: refuse the old not found hint" "16" "$query_hint" \
+  '    "not found" ->' \
+  '    "not found (off)" ->' \
+  "test/dream_model/generator/query_hint_test.gleam"
+
+mutant "model error hints: refuse the old unique hint" "16" "$query_hint" \
+  '    "unique " <> constraint ->' \
+  '    "unique (off) " <> constraint ->' \
+  "test/dream_model/generator/query_hint_test.gleam"
+
 mutant "array elements: Option type" "16" "$gleam_type" \
   'ListType(element) -> "List(Option(" <> type_text(element) <> "))"' \
   'ListType(element) -> "List(" <> type_text(element) <> ")"' \

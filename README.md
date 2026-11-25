@@ -1,7 +1,7 @@
 <div align="center">
   <img src="https://raw.githubusercontent.com/TrustBound/dream/main/ricky_and_lucy.png" alt="Ricky Moony and Lucy, a moon shaped mascot for Dream with the star shaped mascot for Gleam, each with cute cartoon eyes and a smile" width="200">
 
-<b>Typed Gleam models with Dream errors, from PostgreSQL .sql files</b>
+<b>Typed Gleam models with data errors, from PostgreSQL .sql files</b>
 
 </div>
 
@@ -20,23 +20,23 @@
 
 # dream_model
 
-dream_model writes the model modules of a [Dream](https://github.com/TrustBound/dream) app from SQL. You write one `.sql` file for each query, in a folder with the name of the model. dream_model analyzes each statement against your PostgreSQL database and writes one typed Gleam module for the folder. Each function of the module returns a Dream error, so a controller gives the result straight to the client.
+dream_model writes the model modules of a [Dream](https://github.com/TrustBound/dream) app from SQL. You write one `.sql` file for each query, in a folder with the name of the model. dream_model analyzes each statement against your PostgreSQL database and writes one typed Gleam module for the folder. Each function of the module returns its error as data, and the controller of the app maps it to a response.
 
-dream_model is a tool for development time. Your app does not run it. The generated code imports only `dream`, `dream_postgres/client` and the Gleam standard library.
+dream_model is a tool for development time. Your app does not run it. The generated code imports only `dream_postgres/client` and the Gleam standard library.
 
 ## Features
 
 - ✅ One `.sql` file gives one typed function, with a record type for its rows
 - ✅ `Option` only where a value can be NULL: the generator reads the schema and the query tree of PostgreSQL to decide
-- ✅ Dream errors: no row gives `NotFound` (404), a unique violation gives `Conflict` (409), and every other failure gives `InternalServerError` (500) with the name of the function
-- ✅ Hints in SQL comments: the row count, the type name, the 404 text, the 409 text, the parameter names and NULL promises
+- ✅ Data errors: no row gives `NotFound`, a unique violation gives `Conflict` with the name of the constraint, and every other failure gives `QueryFailed` with the name of the function and the original error
+- ✅ Hints in SQL comments: the row count, the type name, the unique constraints, the parameter names and NULL promises
 - ✅ `--check` for CI: it fails when a module differs from its `.sql` files
 - ✅ A schema fingerprint in each module, so the app stops at start-up when the schema changed after the generation
 - ✅ Tested on PostgreSQL 16, 17, 18 and 19
 
 ## Installation
 
-dream_model is a dev dependency. Your app needs `dream` and `dream_postgres` at run time.
+dream_model is a dev dependency. The generated modules need `dream_postgres` at run time.
 
 ### The dev dependency of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L13-L14"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-dev-dependency-of-the-end-to-end-app-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
@@ -57,7 +57,6 @@ Put the `.sql` files of the user model in `src/app/models/user`. The comment lin
 
 ```sql
 -- returns: one User
--- not found: User not found
 select id, email, nickname from users where id = $1
 ```
 
@@ -65,7 +64,7 @@ select id, email, nickname from users where id = $1
 
 ```sql
 -- returns: one User
--- unique users_email_key: Email already taken
+-- unique: users_email_key
 insert into users (email, nickname) values ($1, $2)
 returning id, email, nickname
 ```
@@ -80,7 +79,7 @@ gleam run -m dream_model
 
 The command writes `src/app/models/user.gleam`. It holds the record type, and one function for each `.sql` file:
 
-### The generated type <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L20-L23"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-generated-type-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+### The generated type <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L19-L22"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-generated-type-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
 /// A row of create.sql, find.sql, find_by_email.sql, list.sql and search.sql.
@@ -89,23 +88,26 @@ pub type User {
 }
 ```
 
-### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L80-L88"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-function-of-findsql-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L80-L91"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-function-of-findsql-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from find.sql.
-pub fn find(db: client.Connection, id: Int) -> Result(User, Error) {
+pub fn find(
+  db: client.Connection,
+  id: Int,
+) -> Result(User, client.ModelQueryError) {
   "select id, email, nickname from users where id = $1"
   |> client.query
   |> client.parameter(client.int(id))
   |> client.returning(user_decoder())
   |> client.execute(db)
-  |> one_row("user.find", "User not found", [])
+  |> one_row("user.find", [])
 }
 ```
 
-A controller gives the result to the client. A missing user gives a 404 with the text of the `not found` hint:
+A controller gives the result to the client. It picks the status and the text of each error, for example a 404 for a missing user and a 409 for a taken email:
 
-### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L9-L17"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#answer-with-the-user-or-the-error-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L10-L38"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#answer-with-the-user-or-the-error-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
 /// Answers with the email of the user, or with the status and the message
@@ -113,8 +115,28 @@ A controller gives the result to the client. A missing user gives a 404 with the
 pub fn show(db: client.Connection, id: Int) -> Response {
   case user.find(db, id) {
     Ok(found) -> text_response(200, found.email)
-    Error(problem) ->
-      text_response(error.to_status_code(problem), error.message(problem))
+    Error(error) -> error_response(error)
+  }
+}
+
+/// Creates a user and answers with the email, or with a 409 when the email
+/// is taken.
+pub fn create(db: client.Connection, email: String) -> Response {
+  case user.create(db, email, None) {
+    Ok(created) -> text_response(201, created.email)
+    Error(error) -> error_response(error)
+  }
+}
+
+/// The status and the text of each model error.
+fn error_response(error: client.ModelQueryError) -> Response {
+  case error {
+    client.NotFound -> text_response(404, "User not found")
+    client.Conflict("users_email_key") ->
+      text_response(409, "Email already taken")
+    client.Conflict(constraint:) ->
+      text_response(409, "Conflict on " <> constraint)
+    client.QueryFailed(message:, cause: _) -> text_response(500, message)
   }
 }
 ```
@@ -125,7 +147,7 @@ pub fn show(db: client.Connection, id: Int) -> Response {
 - [Hints](https://github.com/TrustBound/dream_model/blob/main/docs/guides/hints.md): every hint, with a real example and the code that it gives
 - [Why is this column Option?](https://github.com/TrustBound/dream_model/blob/main/docs/guides/why-option.md): each reason the generator gives, with an example query and what to do
 - [Types](https://github.com/TrustBound/dream_model/blob/main/docs/guides/types.md): the Gleam type of each PostgreSQL type, exact numbers, arrays, infinity and the types that need a cast
-- [Errors](https://github.com/TrustBound/dream_model/blob/main/docs/guides/errors.md): the Dream error and the exact text of each failure
+- [Errors](https://github.com/TrustBound/dream_model/blob/main/docs/guides/errors.md): the error and the exact data of each failure
 - [CI and schema drift](https://github.com/TrustBound/dream_model/blob/main/docs/guides/ci-and-schema-drift.md): `--check` in CI and `client.check_schema` at start-up
 - [Command reference](https://github.com/TrustBound/dream_model/blob/main/docs/guides/command-reference.md): every option, setting, exit status and message
 

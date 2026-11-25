@@ -1,5 +1,5 @@
 -- returns: one
--- unique samples_label_index: Label already taken
+-- unique: samples_label_index
 insert into samples (
   small, big, object, real_number, double_number, amount, label, code,
   short_name, nickname, document, binary_document, feeling, flag, data,

@@ -65,11 +65,6 @@ pub type Output {
   RecordOutput(type_name: TypeName, fields: List(Field), line: Int)
 }
 
-/// A unique index whose violation gives a `Conflict` with the message.
-pub type Unique {
-  Unique(constraint: String, message: String)
-}
-
 /// The generated function of one SQL file.
 pub type Query {
   Query(
@@ -82,9 +77,9 @@ pub type Query {
     returns: Returns,
     output: Output,
     arguments: List(Argument),
-    /// The message of the 404 when `returns` is one and no row comes back.
-    not_found: String,
-    unique: List(Unique),
+    /// The names of the unique constraints and indexes whose violation
+    /// gives `client.Conflict`.
+    unique: List(String),
     /// The relations whose catalog facts the analysis read.
     relations: List(String),
   )
@@ -107,7 +102,7 @@ pub type Model {
 /// have such names.
 pub const reserved_argument_names = [
   "db", "client", "decode", "one_row", "single_row", "maybe_row", "optional_row",
-  "many_rows", "no_rows", "query_error_to_error", "unique_message",
+  "many_rows", "no_rows", "query_error_to_error", "unique_violation",
   "schema_fingerprint",
 ]
 
@@ -319,7 +314,6 @@ fn describe(
     returns:,
     output:,
     arguments:,
-    not_found: not_found_message(context, output),
     unique:,
     relations: analysis.relations,
   )
@@ -660,23 +654,13 @@ fn first_duplicate(names: List(String)) -> Result(String, Nil) {
   |> result.map(fn(pair) { pair.0 })
 }
 
-fn not_found_message(context: Context, output: Output) -> String {
-  let type_name = case output {
-    RecordOutput(type_name:, ..) -> query_hint.base_name(type_name)
-    _ -> context.model.type_name
-  }
-  context.hints.not_found
-  |> option.map(fn(hint) { hint.message })
-  |> option.unwrap(type_name <> " not found")
-}
-
 // --- Unique constraints ----------------------------------------------------
 
 fn resolve_unique(
   analyzer: Analyzer,
   context: Context,
   written: List(String),
-) -> Result(List(Unique), List(Problem)) {
+) -> Result(List(String), List(Problem)) {
   list.map(context.hints.unique, resolve_unique_hint(
     analyzer,
     context,
@@ -692,7 +676,7 @@ fn resolve_unique_hint(
   context: Context,
   written: List(String),
   hint: query_hint.UniqueHint,
-) -> Result(List(Unique), Problem) {
+) -> Result(List(String), Problem) {
   let problem = fn(message) {
     Problem(file: context.file, line: hint.line, message:)
   }
@@ -715,7 +699,7 @@ fn resolve_unique_hint(
       ))
     names -> {
       use Nil <- result.map(refuse_same_name(analyzer, written, hint, problem))
-      list.map(names, Unique(_, hint.message))
+      names
     }
   }
 }
@@ -769,8 +753,8 @@ fn descriptions_of(
 fn refuse_when_nothing_written(
   written: List(String),
   problem: fn(String) -> Problem,
-  next: fn() -> Result(List(Unique), Problem),
-) -> Result(List(Unique), Problem) {
+  next: fn() -> Result(List(String), Problem),
+) -> Result(List(String), Problem) {
   case written {
     [] ->
       Error(problem(

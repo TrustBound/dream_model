@@ -10,37 +10,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `gleam run -m dream_model` writes one typed Gleam module for each folder
   of `.sql` files under `src`. Each `.sql` file gives one function, and
-  each function returns a Dream error: `NotFound` (404), `Conflict` (409)
-  or `InternalServerError` (500).
+  each function returns its error as data, `client.ModelQueryError` of
+  dream_postgres: `NotFound`, `Conflict(constraint)` or
+  `QueryFailed(message, cause)`. The `cause` is the original error of the
+  database call. The generated code imports no Dream module, and the
+  controllers of the app pick the status and the text of each error.
 - `gleam run -m dream_model -- --check` writes nothing, and exits with
   status 1 when a module is missing or differs from its `.sql` files.
 - The NULL rules: a column or a parameter is `Option` only when it can be
   NULL. dream_model reads the schema and the analyzed query tree of
   PostgreSQL to decide.
-- The hints `returns`, `not found`, `unique`, `not null`,
-  `not null elements`, `nullable` and `params`.
+- The hints `returns`, `unique`, `not null`, `not null elements`,
+  `nullable` and `params`. `-- unique: users_email_key, users_pkey` names
+  only constraints, with no text for a user. The old forms
+  `-- unique <name>: <message>` and `-- not found: <text>` are refused,
+  with the file, the line and the new form in the message.
 - A unique hint whose name another index or constraint of the database
   also has, in any schema, is refused at generation time. PostgreSQL names
   a violation only by its constraint name.
 - An array column or parameter is `List(Option(T))`, because PostgreSQL
   never forbids a NULL element. The `-- not null elements: tags` hint
   makes the elements of an array result column `List(T)`. The generated
-  code checks the promise on each row, and a NULL element gives a 500
-  that names the SQL file and the column. A column that can be NULL stays
+  code checks the promise on each row, and a NULL element gives a
+  `QueryFailed` that names the SQL file and the column. A column that can be NULL stays
   `Option(List(T))`. The hint is refused for a column that is not an
   array, a table column that is not in the result, and an unknown name.
 - A `numeric` column or parameter is a `String`: the exact text of the
   number, the same text as `value::text` in PostgreSQL, with its scale,
   its trailing zeros, `NaN`, `Infinity` and `-Infinity`. This also holds
   for an element of an array and a domain over `numeric`. PostgreSQL
-  parses a parameter, and a text that is not a number gives the 500
-  `<model>.<function> failed`. A `numeric[]` parameter is refused,
+  parses a parameter, and a text that is not a number gives the
+  `QueryFailed` `<model>.<function> failed`. A `numeric[]` parameter is refused,
   because the driver sends an array in binary; cast a text array in the
   SQL, as `$1::text[]::numeric[]`. This needs dream_postgres_client 1.1.0
   and dream_postgres_driver 1.1.0.
 - A `timestamp`, `timestamptz` or `date` value of `infinity` or
-  `-infinity` gives a 500 that names the function, the column and the
-  Gleam type.
+  `-infinity` gives a `QueryFailed` that names the function, the column
+  and the Gleam type.
 - A parameter inside a built-in length coercion, such as the one of a
   `varchar(10)` column, is stored straight: it is `Option` when the column
   accepts NULL.
@@ -87,9 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Errors, CI and schema drift, and Command reference.
 
 ### Testing
-- The full test run on PostgreSQL 16, 17, 18 and 19: 2833 tests, 0
-  failed, 100.0% line coverage (2304 of 2304 lines). The run took 1
-  minute 28 seconds of wall time, and the runners report 9 minutes 23
+- The full test run on PostgreSQL 16, 17, 18 and 19: 2832 tests, 0
+  failed, 100.0% line coverage (2273 of 2273 lines). The run took 1
+  minute 27 seconds of wall time, and the runners report 8 minutes 52
   seconds of test time. Mode: one `gleam test` with the default
   versions (16 to 19): the tests that are the same on every version and
   each version are groups that run at the same time, the suites of a
@@ -104,11 +110,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   48151 on PostgreSQL 16 (5,196 queries), seed 59273 on 17 (5,210),
   seed 61409 on 18 (5,212) and seed 73627 on 19 (5,191).
 - The mutation test switches off or widens one rule at a time in a copy
-  of the source, and requires failing tests: 67 mutants (68 runs, one
+  of the source, and requires failing tests: 73 mutants (74 runs, one
   mutant runs on two versions), each one killed. They cover the NULL
   rules of columns and parameters, each never-NULL construct, the length
   coercion, the ambiguous unique name refusal, array elements as
-  `Option`, numeric as exact text and the not null elements hint. Each
+  `Option`, numeric as exact text, the not null elements hint, the
+  model errors (`NotFound`, `Conflict` and the cause of `QueryFailed`)
+  and the refusal of the old hint forms. Each
   mutant runs its own test modules first, in 3 workers at the same time:
   a mutant of a NULL rule takes about 16 seconds, and a mutant of the
   generator about 2 seconds, on the same machine.

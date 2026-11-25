@@ -140,15 +140,16 @@ Each problem of a SQL file is one line: `<file>:<line>: <message>`. After the pr
 
 | Message | Fix |
 | --- | --- |
-| `a second '<key>' hint; the first one is on line <n>` | Keep one `returns` or `not found` hint |
+| `a second '<key>' hint; the first one is on line <n>` | Keep one `returns` hint |
 | `'<value>' is not a returns hint; write 'returns: one', 'maybe', 'many' or 'none', with a type name after it, for example 'returns: one User'` | Fix the hint |
 | `'<form>' is not a returns form; write one, maybe, many or none` | Fix the form |
 | `'returns: none' takes no type name` | Remove the type name |
 | `'<name>' is not a type name; a type name starts with a capital letter and has only letters and digits, for example User` | Fix the type name |
 | `'<name>' is not a type name; a type of another model is its module and its type, for example app/models/user.User` | Fix the module type |
-| `the 'not found' hint needs 'returns: one'; only 'one' fails when there is no row` | Use `returns: one`, or remove the hint |
-| `the '<key>' hint has no message` | Write the text after the colon |
-| `the 'unique' hint names no constraint; write 'unique <constraint>: <message>'` | Name the constraint |
+| `the 'not found' hint is gone: no row gives client.NotFound, which has no message; remove this line and write the message where the app maps client.NotFound` | Remove the line. Write the text in the controller |
+| `'unique <name>: <message>' is the old form of the unique hint, and a hint holds no message now; write 'unique: <name>' and write the message where the app maps client.Conflict` | Write `-- unique: <name>`. Write the text in the controller |
+| `the 'unique' hint names no constraint; write 'unique: <constraint>', for example 'unique: users_email_key'` | Name the constraint |
+| `the constraint '<name>' is in a 'unique' hint a second time; the first one is on line <n>` | Name each constraint one time |
 | `'returns: none', and the statement returns the columns <columns>; remove the columns or write another returns form` | Remove the columns, or change the form |
 | `'returns: <form>' needs result columns, and the statement returns none; write 'returns: none'` | Use `returns: none` |
 | `hint names '<name>', which is not a result column` | Name a result column in `not null` or `nullable` |
@@ -189,7 +190,7 @@ Each problem of a SQL file is one line: `<file>:<line>: <message>`. After the pr
 | `the parameter $<n> has the PostgreSQL type <type>, which dream_model does not support; cast it in the SQL from a supported type, for example $<n>::text::<type>` | Cast the parameter |
 | `the parameter $<n> is an array of numeric, which dream_model cannot send exactly; take a text array and cast it in the SQL, for example $<n>::text[]::numeric[], and the parameter is a List(Option(String))` | Cast a text array. See [Types](types.md#an-array-of-numeric-as-a-parameter) |
 | `the 'params' hint names <n> parameters, and the statement has <m>; name every parameter, in order` | Name every parameter |
-| `the parameter name '<name>' is a name that the generated function uses itself: its connection, a module, a helper or a decoder; choose another name` | Choose another name than `db`, `client`, `decode`, a helper (`one_row`, `single_row`, `maybe_row`, `optional_row`, `many_rows`, `no_rows`, `query_error_to_error`, `unique_message`, `schema_fingerprint`) or a name that ends in `_decoder` |
+| `the parameter name '<name>' is a name that the generated function uses itself: its connection, a module, a helper or a decoder; choose another name` | Choose another name than `db`, `client`, `decode`, a helper (`one_row`, `single_row`, `maybe_row`, `optional_row`, `many_rows`, `no_rows`, `query_error_to_error`, `unique_violation`, `schema_fingerprint`) or a name that ends in `_decoder` |
 | `'<name>' is not a Gleam name; write the parameter names in snake case, for example user_id` | Fix the name |
 | `the parameter $<n> is not stored into or compared with a table column, so it has no name; name every parameter, in order, with a line like '-- params: ...'` | Add a `params` hint |
 | `the parameter $<n> is used with the columns <columns>, so its name is not clear; ...` | Add a `params` hint |

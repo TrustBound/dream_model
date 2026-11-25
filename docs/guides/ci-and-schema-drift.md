@@ -42,7 +42,7 @@ The CI job needs a database with the schema of the app:
 
 Each module holds `schema_fingerprint`: its module name, the tables that its functions read and write, and the fingerprint hash of those tables when dream_model generated it.
 
-### The fingerprint of the user module <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L13-L18"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The fingerprint of the user module <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L12-L17"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 pub const schema_fingerprint =
@@ -71,7 +71,7 @@ pub fn check_models(db: client.Connection) -> Result(Nil, String) {
 
 `check_schema` reads the fingerprint of the tables of each module from the database, and compares it with the hash in the module. When a migration changed a table after the generation, the result is an error. `client.format_schema_check_error` gives a message with one line for each module that changed:
 
-### The first line after a new column <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L52"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The first line after a new column <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L53"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 | startup.check_models after a new column: Error("The database schema changed after dream_model generated these modules. Regenerate them with dream_model:")

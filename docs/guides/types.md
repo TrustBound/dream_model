@@ -66,7 +66,7 @@ create table samples (
 );
 ```
 
-### The type of a samples row <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L19-L47"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The type of a samples row <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L18-L46"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// A row of get.sql.
@@ -115,14 +115,14 @@ This applies to a result column, to a parameter, to an element of an array, and 
 select $1::numeric as exact
 ```
 
-### The generated function <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L66-L85"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The generated function <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L65-L84"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from echo_amount.sql.
 pub fn echo_amount(
   db: client.Connection,
   amount: String,
-) -> Result(String, Error) {
+) -> Result(String, client.ModelQueryError) {
   "select $1::numeric as exact"
   |> client.query
   |> client.parameter(client.numeric_text(amount))
@@ -136,13 +136,13 @@ pub fn echo_amount(
     ),
   ))
   |> client.execute(db)
-  |> one_row("sample.echo_amount", "Sample not found", [])
+  |> one_row("sample.echo_amount", [])
 }
 ```
 
 The end-to-end app sends each text and compares the result with it. Each one comes back exactly:
 
-### Exact round trips <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L37-L43"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Exact round trips <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L38-L44"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 | sample.echo_amount of 1.50: Ok(#("1.50", True))
@@ -154,7 +154,7 @@ The end-to-end app sends each text and compares the result with it. Each one com
 | sample.echo_amount of -Infinity: Ok(#("-Infinity", True))
 ```
 
-A text that is not a number fails in PostgreSQL with the error `22P02` (`invalid input syntax for type numeric`), and the function gives `InternalServerError` (500), as for every other database error. [Errors](errors.md#a-numeric-text-that-is-not-a-number) tells why, and how to check the text first.
+A text that is not a number fails in PostgreSQL with the error `22P02` (`invalid input syntax for type numeric`), and the function gives `QueryFailed`, as for every other database error. [Errors](errors.md#a-numeric-text-that-is-not-a-number) tells why, and how to check the text first.
 
 ### An array of numeric as a parameter
 
@@ -172,14 +172,14 @@ Cast a text array in the SQL. The parameter is then a `text[]`, so the function 
 select $1::text[]::numeric[] as amounts
 ```
 
-### The generated function of the cast <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L49-L64"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The generated function of the cast <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L48-L63"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from amounts.sql.
 pub fn amounts(
   db: client.Connection,
   amounts: List(Option(String)),
-) -> Result(Option(List(Option(String))), Error) {
+) -> Result(Option(List(Option(String))), client.ModelQueryError) {
   "select $1::text[]::numeric[] as amounts"
   |> client.query
   |> client.parameter(client.array(client.nullable(client.text, _), amounts))
@@ -189,11 +189,11 @@ pub fn amounts(
     decode.optional(decode.list(decode.optional(client.numeric_text_decoder()))),
   ))
   |> client.execute(db)
-  |> one_row("sample.amounts", "Sample not found", [])
+  |> one_row("sample.amounts", [])
 }
 ```
 
-### The array round trip <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L45"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The array round trip <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L46"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 | sample.amounts of a text array: Ok(Some([Some("1.50"), None, Some("-0.001")]))
@@ -214,7 +214,7 @@ PostgreSQL never forbids a NULL element in an array. A NOT NULL constraint on an
   )
 ```
 
-### Send an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L159-L162"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Send an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L161-L164"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
   |> client.parameter(client.nullable(
@@ -225,13 +225,13 @@ PostgreSQL never forbids a NULL element in an array. A NOT NULL constraint on an
 
 The end-to-end app stores `["a", NULL]` and reads it back:
 
-### A NULL element round trip <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L33"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### A NULL element round trip <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L34"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 | array with a NULL element round trip: Ok(True)
 ```
 
-To get `List(String)`, promise that the elements are never NULL with the `-- not null elements:` hint. The generated code checks the promise on each row: a NULL element gives `InternalServerError` (500) with a message that names the file and the column. The hint is only about the elements. A column that can be NULL stays `Option`, so `tags` is an `Option(List(String))`:
+To get `List(String)`, promise that the elements are never NULL with the `-- not null elements:` hint. The generated code checks the promise on each row: a NULL element gives `QueryFailed` with a message that names the file and the column. The hint is only about the elements. A column that can be NULL stays `Option`, so `tags` is an `Option(List(String))`:
 
 ### Promise the elements of an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample/tags.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -248,7 +248,7 @@ select tags from samples where id = $1
 pub fn tags(
   db: client.Connection,
   id: Int,
-) -> Result(Option(List(String)), Error) {
+) -> Result(Option(List(String)), client.ModelQueryError) {
   "select tags from samples where id = $1"
   |> client.query
   |> client.parameter(client.int(id))
@@ -261,14 +261,14 @@ pub fn tags(
     )),
   ))
   |> client.execute(db)
-  |> one_row("sample.tags", "Sample not found", [])
+  |> one_row("sample.tags", [])
 }
 ```
 
-### A NULL element breaks the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L47-L49"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### A NULL element breaks the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L48-L50"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-| sample.tags with a NULL element: 500 the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL
+| sample.tags with a NULL element: QueryFailed the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL (cause: UnexpectedResultType)
 | sample.tags with no NULL element: Ok(Some(["a", "b"]))
 | sample.tags of a NULL array: Ok(None)
 ```
@@ -277,14 +277,14 @@ pub fn tags(
 
 ## Infinity
 
-A `timestamp`, `timestamptz` or `date` column can hold `'infinity'` and `'-infinity'`. A `client.Timestamp` or a `client.Date` cannot hold them. The generated decoder fails such a row, and the function gives `InternalServerError` (500). The message names the function, the column and the Gleam type:
+A `timestamp`, `timestamptz` or `date` column can hold `'infinity'` and `'-infinity'`. A `client.Timestamp` or a `client.Date` cannot hold them. The generated decoder fails such a row, and the function gives `QueryFailed`. The message names the function, the column and the Gleam type:
 
-### The message of each infinite value <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L34-L36"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The message of each infinite value <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L35-L37"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-| sample.get of an infinite timestamp: 500 sample.get: the column happened_at holds infinity, which the Gleam type Timestamp cannot hold
-| sample.get of an infinite timestamptz: 500 sample.get: the column happened_at_zone holds -infinity, which the Gleam type Timestamp cannot hold
-| sample.get of an infinite date: 500 sample.get: the column day holds infinity, which the Gleam type Date cannot hold
+| sample.get of an infinite timestamp: QueryFailed sample.get: the column happened_at holds infinity, which the Gleam type Timestamp cannot hold (cause: UnexpectedResultType)
+| sample.get of an infinite timestamptz: QueryFailed sample.get: the column happened_at_zone holds -infinity, which the Gleam type Timestamp cannot hold (cause: UnexpectedResultType)
+| sample.get of an infinite date: QueryFailed sample.get: the column day holds infinity, which the Gleam type Date cannot hold (cause: UnexpectedResultType)
 ```
 
 If a column can hold infinity, change the query. Skip the infinite rows with `isfinite`:

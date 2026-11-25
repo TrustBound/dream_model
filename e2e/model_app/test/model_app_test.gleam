@@ -8,7 +8,6 @@ import app/models/post
 import app/models/sample
 import app/models/user
 import app/startup
-import dream/http/error.{type Error}
 import dream/http/response
 import dream_postgres/client
 import gleam/int
@@ -32,6 +31,10 @@ pub fn main() -> Nil {
   show_response(
     "user_controller.show of a missing user",
     user_controller.show(db, 99),
+  )
+  show_response(
+    "user_controller.create of a taken email",
+    user_controller.create(db, "ann@example.com"),
   )
   check_posts(db)
   check_samples(db)
@@ -64,13 +67,27 @@ fn show_response(label: String, found: response.Response) -> Nil {
   )
 }
 
-fn show_error(label: String, value: Result(a, Error)) -> Nil {
+/// Shows the error of a model function as data: `NotFound`, the
+/// constraint of a `Conflict`, or the message of a `QueryFailed` and the
+/// kind of its cause. The details of a cause can differ between
+/// PostgreSQL versions, so only its constructor shows.
+fn show_error(label: String, value: Result(a, client.ModelQueryError)) -> Nil {
   let text = case value {
     Ok(found) -> "Ok " <> string.inspect(found)
-    Error(found) ->
-      int.to_string(error.to_status_code(found)) <> " " <> error.message(found)
+    Error(client.NotFound) -> "NotFound"
+    Error(client.Conflict(constraint:)) -> "Conflict " <> constraint
+    Error(client.QueryFailed(message:, cause:)) ->
+      "QueryFailed " <> message <> " (cause: " <> cause_kind(cause) <> ")"
   }
   io.println("| " <> label <> ": " <> text)
+}
+
+fn cause_kind(cause: client.QueryError) -> String {
+  let text = string.inspect(cause)
+  case string.split_once(text, "(") {
+    Ok(#(kind, _)) -> kind
+    Error(Nil) -> text
+  }
 }
 
 fn check_users(db: client.Connection) -> Nil {

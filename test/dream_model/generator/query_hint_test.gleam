@@ -1,8 +1,8 @@
 //// Tests for `dream_model/generator/query_hint`.
 
 import dream_model/generator/query_hint.{
-  HintError, LocalType, ModuleType, NamedLine, NotFoundHint, QueryHints,
-  ReturnsHint, ReturnsMany, ReturnsMaybe, ReturnsNone, ReturnsOne, UniqueHint,
+  HintError, LocalType, ModuleType, NamedLine, QueryHints, ReturnsHint,
+  ReturnsMany, ReturnsMaybe, ReturnsNone, ReturnsOne, UniqueHint,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -35,7 +35,6 @@ fn parse_tests() {
         Ok(
           QueryHints(
             returns: None,
-            not_found: None,
             unique: [],
             parameters_line: None,
             column_names: [],
@@ -48,7 +47,7 @@ fn parse_tests() {
     it("reads every hint with its line", fn() {
       // Arrange
       let sql =
-        "-- Returns: One User\n  -- NOT FOUND: No such user \n-- unique users_email_key: Email already taken\n-- unique users_pkey: Id taken\n-- not null: a, b\n-- nullable: c\n-- params: id\n-- other: x\n-- Not Null Elements: tags, , scores\n-- not null elements: labels\nselect 1"
+        "-- Returns: One User\n  -- UNIQUE: users_email_key, , users_name_key \n-- unique: users_pkey\n-- not null: a, b\n-- nullable: c\n-- params: id\n-- other: x\n-- Not Null Elements: tags, , scores\n-- not null elements: labels\nselect 1"
 
       // Act
       let hints = query_hint.parse(sql)
@@ -60,21 +59,21 @@ fn parse_tests() {
         Ok(
           QueryHints(
             returns: Some(ReturnsHint(ReturnsOne, Some(LocalType("User")), 1)),
-            not_found: Some(NotFoundHint("No such user", 2)),
             unique: [
-              UniqueHint("users_email_key", "Email already taken", 3),
-              UniqueHint("users_pkey", "Id taken", 4),
+              UniqueHint("users_email_key", 2),
+              UniqueHint("users_name_key", 2),
+              UniqueHint("users_pkey", 3),
             ],
-            parameters_line: Some(7),
+            parameters_line: Some(6),
             column_names: [
-              NamedLine("a", 5),
-              NamedLine("b", 5),
-              NamedLine("c", 6),
+              NamedLine("a", 4),
+              NamedLine("b", 4),
+              NamedLine("c", 5),
             ],
             element_names: [
-              NamedLine("tags", 9),
-              NamedLine("scores", 9),
-              NamedLine("labels", 10),
+              NamedLine("tags", 8),
+              NamedLine("scores", 8),
+              NamedLine("labels", 9),
             ],
           ),
         ),
@@ -84,7 +83,7 @@ fn parse_tests() {
     it("reads only the comment block at the top of the file", fn() {
       // Arrange
       let sql =
-        "-- returns: many\n\nselect email\n-- returns: one User\n-- unique users_email_key: Taken\n-- not null elements: tags\nfrom users"
+        "-- returns: many\n\nselect email\n-- returns: one User\n-- unique: users_email_key\n-- not null elements: tags\nfrom users"
 
       // Act
       let hints = query_hint.parse(sql)
@@ -96,7 +95,6 @@ fn parse_tests() {
         Ok(
           QueryHints(
             returns: Some(ReturnsHint(ReturnsMany, None, 1)),
-            not_found: None,
             unique: [],
             parameters_line: None,
             column_names: [],
@@ -310,41 +308,26 @@ fn refusal_tests() {
       )
       |> or_fail_with("Expected the second hint to be refused")
     }),
-    it("refuses an empty not found message and not found without one", fn() {
+    it("refuses the old not found hint", fn() {
       // Act
-      let hints = refused("-- not found:\n-- not found: Gone")
+      let hints = refused("-- returns: one\n-- not found: No such user")
 
       // Assert
       hints
       |> should
       |> be_equal(
         Error([
-          HintError(1, "the 'not found' hint has no message"),
           HintError(
             2,
-            "the 'not found' hint needs 'returns: one'; only 'one' fails when there is no row",
+            "the 'not found' hint is gone: no row gives client.NotFound, which has no message; remove this line and write the message where the app maps client.NotFound",
           ),
         ]),
       )
-      |> or_fail_with("Expected both refusals")
+      |> or_fail_with("Expected the refused not found hint")
     }),
-    it("refuses a second not found hint", fn() {
+    it("refuses the old unique hint with a message", fn() {
       // Act
-      let hints = refused("-- returns: one\n-- not found: A\n-- not found: B")
-
-      // Assert
-      hints
-      |> should
-      |> be_equal(
-        Error([
-          HintError(3, "a second 'not found' hint; the first one is on line 2"),
-        ]),
-      )
-      |> or_fail_with("Expected the second hint to be refused")
-    }),
-    it("refuses not found with returns many", fn() {
-      // Act
-      let hints = refused("-- not found: Gone\n-- returns: many")
+      let hints = refused("-- unique users_email_key: Email already taken")
 
       // Assert
       hints
@@ -353,15 +336,32 @@ fn refusal_tests() {
         Error([
           HintError(
             1,
-            "the 'not found' hint needs 'returns: one'; only 'one' fails when there is no row",
+            "'unique users_email_key: Email already taken' is the old form of the unique hint, and a hint holds no message now; write 'unique: users_email_key' and write the message where the app maps client.Conflict",
           ),
         ]),
       )
-      |> or_fail_with("Expected the refused not found")
+      |> or_fail_with("Expected the refused old unique hint")
+    }),
+    it("refuses the old unique hint without a message", fn() {
+      // Act
+      let hints = refused("-- unique  a_key :")
+
+      // Assert
+      hints
+      |> should
+      |> be_equal(
+        Error([
+          HintError(
+            1,
+            "'unique  a_key:' is the old form of the unique hint, and a hint holds no message now; write 'unique: a_key' and write the message where the app maps client.Conflict",
+          ),
+        ]),
+      )
+      |> or_fail_with("Expected the refused old unique hint")
     }),
     it("refuses a unique hint without a constraint", fn() {
       // Act
-      let hints = refused("-- unique: Taken")
+      let hints = refused("-- unique: , ")
 
       // Assert
       hints
@@ -370,27 +370,15 @@ fn refusal_tests() {
         Error([
           HintError(
             1,
-            "the 'unique' hint names no constraint; write 'unique <constraint>: <message>'",
+            "the 'unique' hint names no constraint; write 'unique: <constraint>', for example 'unique: users_email_key'",
           ),
         ]),
       )
       |> or_fail_with("Expected the refused unique hint")
     }),
-    it("refuses a unique hint without a message", fn() {
+    it("refuses one constraint in two unique hints", fn() {
       // Act
-      let hints = refused("-- unique users_email_key:")
-
-      // Assert
-      hints
-      |> should
-      |> be_equal(
-        Error([HintError(1, "the 'unique users_email_key' hint has no message")]),
-      )
-      |> or_fail_with("Expected the refused unique hint")
-    }),
-    it("refuses a second unique hint for one constraint", fn() {
-      // Act
-      let hints = refused("-- unique a_key: A\n-- unique a_key: B")
+      let hints = refused("-- unique: a_key\n-- unique: b_key, a_key")
 
       // Assert
       hints
@@ -399,11 +387,11 @@ fn refusal_tests() {
         Error([
           HintError(
             2,
-            "a second 'unique a_key' hint; the first one is on line 1",
+            "the constraint 'a_key' is in a 'unique' hint a second time; the first one is on line 1",
           ),
         ]),
       )
-      |> or_fail_with("Expected the second unique hint to be refused")
+      |> or_fail_with("Expected the second name to be refused")
     }),
   ])
 }

@@ -1,19 +1,22 @@
 //// The model hints of a SQL file: comment lines that tell the generator
 //// what the generated function returns and which errors it maps.
 ////
-//// - `-- returns: one User` returns one row, or the not-found error.
+//// - `-- returns: one User` returns one row, or `client.NotFound`.
 ////   `maybe` returns `Option`, `many` returns `List`, and `none` returns
 ////   `Nil`. With no type name, `one`, `maybe` and `many` return the value
 ////   of the only result column, or the model's own type when the result
 ////   has more columns. A type of another model is named by its module, for
 ////   example `app/models/user.User`.
-//// - `-- not found: User not found` is the text of the 404 error of `one`.
-//// - `-- unique users_email_key: Email already taken` maps a violation of
-////   that unique constraint to a 409 error with that text.
+//// - `-- unique: users_email_key, users_pkey` maps a violation of one of
+////   these unique constraints to `client.Conflict` with its name. A hint
+////   holds no text for a user: the app writes that text.
 //// - `-- not null elements: tags, scores` promises that the elements of
 ////   these array result columns are never NULL. Each one is a `List(T)`,
 ////   not a `List(Option(T))`, and the generated code checks the promise
 ////   on each row.
+////
+//// The old forms `-- unique <constraint>: <message>` and `-- not found:
+//// <text>` are refused, with the new form in the message.
 ////
 //// The NULL hints (`not null`, `nullable`, `params`) are read by
 //// `dream_model/nullability/hint`; this module only keeps their line
@@ -24,13 +27,12 @@ import dream_model/nullability/hint
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/order
 import gleam/result
 import gleam/string
 
 /// What a generated function returns.
 pub type Returns {
-  /// One row. No row is the not-found error.
+  /// One row. No row is `client.NotFound`.
   ReturnsOne
   /// No row or one row, as `Option`.
   ReturnsMaybe
@@ -53,14 +55,9 @@ pub type ReturnsHint {
   ReturnsHint(returns: Returns, type_name: Option(TypeName), line: Int)
 }
 
-/// A `-- not found:` line.
-pub type NotFoundHint {
-  NotFoundHint(message: String, line: Int)
-}
-
-/// A `-- unique <constraint>:` line.
+/// A constraint name of a `-- unique:` line.
 pub type UniqueHint {
-  UniqueHint(constraint: String, message: String, line: Int)
+  UniqueHint(constraint: String, line: Int)
 }
 
 /// A name in a `-- not null:`, `-- nullable:` or `-- params:` line.
@@ -72,7 +69,6 @@ pub type NamedLine {
 pub type QueryHints {
   QueryHints(
     returns: Option(ReturnsHint),
-    not_found: Option(NotFoundHint),
     unique: List(UniqueHint),
     /// The line of the last `-- params:` hint.
     parameters_line: Option(Int),
@@ -102,19 +98,15 @@ pub fn parse(sql: String) -> Result(QueryHints, List(HintError)) {
   let empty =
     QueryHints(
       returns: None,
-      not_found: None,
       unique: [],
       parameters_line: None,
       column_names: [],
       element_names: [],
     )
   let #(hints, errors) = list.fold(lines, #(empty, []), add_line)
-  let errors =
-    list.append(list.reverse(errors), check_not_found(hints))
-    |> list.sort(compare_errors)
   case errors {
-    [] -> Ok(QueryHints(..hints, unique: list.reverse(hints.unique)))
-    _ -> Error(errors)
+    [] -> Ok(hints)
+    _ -> Error(list.reverse(errors))
   }
 }
 
@@ -126,14 +118,6 @@ pub fn type_name_to_string(type_name: TypeName) -> String {
   }
 }
 
-/// Returns the name of a type without its module, for example `User`.
-pub fn base_name(type_name: TypeName) -> String {
-  case type_name {
-    LocalType(name) -> name
-    ModuleType(name:, ..) -> name
-  }
-}
-
 /// Returns the word of a returns form, as in the hint.
 pub fn returns_to_string(returns: Returns) -> String {
   case returns {
@@ -142,10 +126,6 @@ pub fn returns_to_string(returns: Returns) -> String {
     ReturnsMany -> "many"
     ReturnsNone -> "none"
   }
-}
-
-fn compare_errors(first: HintError, second: HintError) -> order.Order {
-  int.compare(first.line, second.line)
 }
 
 fn read_line(text: String, number: Int) -> Result(Line, Nil) {
@@ -167,15 +147,22 @@ fn add_line(
   let #(hints, errors) = state
   let added = case string.lowercase(line.key) {
     "returns" -> add_returns(hints, line)
-    "not found" -> add_not_found(hints, line)
+    "not found" ->
+      Error(
+        "the 'not found' hint is gone: no row gives client.NotFound, which has no message; remove this line and write the message where the app maps client.NotFound",
+      )
     "params" -> Ok(QueryHints(..hints, parameters_line: Some(line.number)))
     "not null" | "nullable" -> Ok(add_column_names(hints, line))
     "not null elements" -> Ok(add_element_names(hints, line))
-    "unique" ->
+    "unique" -> add_unique(hints, line)
+    "unique " <> constraint ->
       Error(
-        "the 'unique' hint names no constraint; write 'unique <constraint>: <message>'",
+        "'"
+        <> string.trim(line.key <> ": " <> line.value)
+        <> "' is the old form of the unique hint, and a hint holds no message now; write 'unique: "
+        <> string.trim(constraint)
+        <> "' and write the message where the app maps client.Conflict",
       )
-    "unique " <> _ -> add_unique(hints, line)
     _ -> Ok(hints)
   }
   case added {
@@ -351,47 +338,36 @@ const lowercase_letters = "abcdefghijklmnopqrstuvwxyz"
 
 const digits = "0123456789"
 
-fn add_not_found(hints: QueryHints, line: Line) -> Result(QueryHints, String) {
-  use Nil <- result.try(refuse_second(
-    hints.not_found |> option.map(fn(hint) { hint.line }),
-    "not found",
-  ))
-  use message <- result.map(require_message(line.value, "not found"))
-  QueryHints(..hints, not_found: Some(NotFoundHint(message, line.number)))
-}
-
-fn require_message(value: String, key: String) -> Result(String, String) {
-  case value {
-    "" -> Error("the '" <> key <> "' hint has no message")
-    _ -> Ok(value)
+fn add_unique(hints: QueryHints, line: Line) -> Result(QueryHints, String) {
+  case named_lines(line) {
+    [] ->
+      Error(
+        "the 'unique' hint names no constraint; write 'unique: <constraint>', for example 'unique: users_email_key'",
+      )
+    names -> list.try_fold(names, hints, add_unique_name)
   }
 }
 
-fn add_unique(hints: QueryHints, line: Line) -> Result(QueryHints, String) {
-  let constraint = string.trim(string.drop_start(line.key, 7))
-  let key = "unique " <> constraint
-  use Nil <- result.try(refuse_second(
-    list.find(hints.unique, fn(hint) { hint.constraint == constraint })
-      |> result.map(fn(hint) { hint.line })
-      |> option.from_result,
-    key,
-  ))
-  use message <- result.map(require_message(line.value, key))
-  QueryHints(..hints, unique: [
-    UniqueHint(constraint:, message:, line: line.number),
-    ..hints.unique
-  ])
-}
-
-fn check_not_found(hints: QueryHints) -> List(HintError) {
-  case hints.not_found, hints.returns {
-    None, _ -> []
-    Some(_), Some(ReturnsHint(returns: ReturnsOne, ..)) -> []
-    Some(hint), _ -> [
-      HintError(
-        hint.line,
-        "the 'not found' hint needs 'returns: one'; only 'one' fails when there is no row",
-      ),
-    ]
+fn add_unique_name(
+  hints: QueryHints,
+  named: NamedLine,
+) -> Result(QueryHints, String) {
+  case list.find(hints.unique, fn(hint) { hint.constraint == named.name }) {
+    Ok(earlier) ->
+      Error(
+        "the constraint '"
+        <> named.name
+        <> "' is in a 'unique' hint a second time; the first one is on line "
+        <> int.to_string(earlier.line),
+      )
+    Error(Nil) ->
+      Ok(
+        QueryHints(
+          ..hints,
+          unique: list.append(hints.unique, [
+            UniqueHint(constraint: named.name, line: named.line),
+          ]),
+        ),
+      )
   }
 }

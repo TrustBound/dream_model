@@ -5,7 +5,7 @@ import dream_model/generator/gleam_type.{
 }
 import dream_model/generator/query.{
   type Problem, type Query, Argument, Field, Model, NoOutput, Problem, Query,
-  RecordOutput, Unique, ValueOutput,
+  RecordOutput, ValueOutput,
 }
 import dream_model/generator/query_hint.{
   LocalType, ReturnsMany, ReturnsNone, ReturnsOne,
@@ -77,7 +77,7 @@ fn success_tests(version: Int) {
         analyze(
           version,
           "find.sql",
-          "-- returns: one User\n-- not found: No such user\nselect id, email, nickname from users where id = $1\n",
+          "-- returns: one User\nselect id, email, nickname from users where id = $1\n",
         )
 
       // Assert
@@ -92,7 +92,6 @@ fn success_tests(version: Int) {
             returns: ReturnsOne,
             output: RecordOutput(LocalType("User"), user_fields, 1),
             arguments: [Argument("id", IntType, False)],
-            not_found: "No such user",
             unique: [],
             relations: ["public.users"],
           ),
@@ -106,24 +105,23 @@ fn success_tests(version: Int) {
         analyze(
           version,
           "create.sql",
-          "-- returns: one User\n-- unique users_email_key: Email already taken\ninsert into users (email, nickname) values ($1, $2)\nreturning id, email, nickname",
+          "-- returns: one User\n-- unique: users_email_key\ninsert into users (email, nickname) values ($1, $2)\nreturning id, email, nickname",
         )
 
       // Assert
       found
-      |> result.map(fn(described) {
-        #(described.arguments, described.unique, described.not_found)
-      })
+      |> result.map(fn(described) { #(described.arguments, described.unique) })
       |> should
       |> be_equal(
-        Ok(#(
-          [
-            Argument("email", StringType, False),
-            Argument("nickname", StringType, True),
-          ],
-          [Unique("users_email_key", "Email already taken")],
-          "User not found",
-        )),
+        Ok(
+          #(
+            [
+              Argument("email", StringType, False),
+              Argument("nickname", StringType, True),
+            ],
+            ["users_email_key"],
+          ),
+        ),
       )
       |> or_fail_with("Expected the arguments and the unique constraint")
     }),
@@ -233,7 +231,7 @@ fn success_tests(version: Int) {
           analyze(
             version,
             "add_event.sql",
-            "-- unique events_pkey: Event taken\ninsert into events values ($1, $2, $3)",
+            "-- unique: events_pkey\ninsert into events values ($1, $2, $3)",
           )
 
         // Assert
@@ -242,8 +240,8 @@ fn success_tests(version: Int) {
         |> should
         |> be_equal(
           Ok([
-            Unique("events_a_pkey", "Event taken"),
-            Unique("events_pkey", "Event taken"),
+            "events_a_pkey",
+            "events_pkey",
           ]),
         )
         |> or_fail_with("Expected both index names")
@@ -394,7 +392,7 @@ fn refusal_tests(version: Int) {
     #(
       "refuses a unique hint on a statement that writes no table",
       "list.sql",
-      "-- returns: many\n-- unique users_email_key: Taken\nselect id from users",
+      "-- returns: many\n-- unique: users_email_key\nselect id from users",
       [
         problem(
           "list.sql",
@@ -406,7 +404,7 @@ fn refusal_tests(version: Int) {
     #(
       "refuses a unique hint that names no unique constraint",
       "rename.sql",
-      "-- unique users_nickname_key: Taken\nupdate users set nickname = $1",
+      "-- unique: users_nickname_key\nupdate users set nickname = $1",
       [
         problem(
           "rename.sql",
@@ -418,7 +416,7 @@ fn refusal_tests(version: Int) {
     #(
       "refuses a unique hint whose name a check constraint of another table has",
       "create.sql",
-      "-- unique accounts_handle_key: Handle taken\ninsert into accounts (id, handle) values ($1, $2)",
+      "-- unique: accounts_handle_key\ninsert into accounts (id, handle) values ($1, $2)",
       [
         problem(
           "create.sql",
@@ -430,7 +428,7 @@ fn refusal_tests(version: Int) {
     #(
       "refuses a unique hint whose name an index of another schema has",
       "create.sql",
-      "-- unique badges_code_index: Code taken\ninsert into badges (id, code) values ($1, $2)",
+      "-- unique: badges_code_index\ninsert into badges (id, code) values ($1, $2)",
       [
         problem(
           "create.sql",
@@ -442,7 +440,7 @@ fn refusal_tests(version: Int) {
     #(
       "refuses a unique hint whose name a foreign key and a domain constraint have",
       "create.sql",
-      "-- unique teams_id_key: Team taken\ninsert into teams (id) values ($1)",
+      "-- unique: teams_id_key\ninsert into teams (id) values ($1)",
       [
         problem(
           "create.sql",
