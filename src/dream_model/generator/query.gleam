@@ -42,6 +42,10 @@ pub type Field {
     /// True when a `-- not null:` hint promised the column is never NULL:
     /// the decoder checks it on each row.
     promised: Bool,
+    /// True when a `-- not null elements:` hint promised the elements of
+    /// this array column are never NULL: the field is `List(T)`, and the
+    /// decoder checks each element on each row.
+    elements_promised: Bool,
   )
 }
 
@@ -297,7 +301,9 @@ fn describe(
     gleam_type.load(analyzer, oids)
     |> result.map_error(fn(error) { [database_problem(context, error)] }),
   )
-  let columns = resolve_columns(context, types, analysis.columns)
+  let columns =
+    resolve_columns(context, types, analysis.columns)
+    |> result.try(promise_elements(analyzer, context, analysis.relations, _))
   let arguments = resolve_arguments(context, types, analysis.parameters)
   let unique = resolve_unique(analyzer, context, analysis.written_relations)
   use #(columns, arguments, unique) <- result.try(collect_three(
@@ -387,7 +393,7 @@ fn hint_error_line(context: Context, error: nullability.HintError) -> Int {
 
 /// A column with its Gleam type, before its name is checked.
 type TypedColumn {
-  TypedColumn(column: Column, gleam_type: GleamType)
+  TypedColumn(column: Column, gleam_type: GleamType, elements_promised: Bool)
 }
 
 fn resolve_columns(
@@ -397,7 +403,7 @@ fn resolve_columns(
 ) -> Result(List(TypedColumn), List(Problem)) {
   list.map(columns, fn(column) {
     gleam_type.resolve(types, column.type_oid)
-    |> result.map(TypedColumn(column, _))
+    |> result.map(TypedColumn(column, _, False))
     |> result.map_error(fn(type_name) {
       Problem(
         file: context.file,
@@ -526,7 +532,103 @@ fn make_field(typed: TypedColumn, field_name: String) -> Field {
     gleam_type: typed.gleam_type,
     optional: !typed.column.not_null,
     promised: typed.column.reason == reason.NotNullHint,
+    elements_promised: typed.elements_promised,
   )
+}
+
+// --- The `-- not null elements:` hint ---------------------------------------
+
+/// The table columns with a name, of the relations that a query reads.
+const relation_column_sql =
+  "select pg_catalog.quote_ident(n.nspname) || '.' || pg_catalog.quote_ident(c.relname)
+  || '.' || pg_catalog.quote_ident(a.attname)
+from pg_catalog.pg_attribute a
+join pg_catalog.pg_class c on c.oid = a.attrelid
+join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+where a.attrelid = any($1::pg_catalog.text[]::pg_catalog.regclass[])
+  and a.attname = $2 and a.attnum > 0 and not a.attisdropped
+order by 1"
+
+/// Marks the array columns that a `-- not null elements:` hint names.
+/// Refuses a name that is not a result column, or a column that is not an
+/// array.
+fn promise_elements(
+  analyzer: Analyzer,
+  context: Context,
+  relations: List(String),
+  columns: List(TypedColumn),
+) -> Result(List(TypedColumn), List(Problem)) {
+  let named = context.hints.element_names
+  use Nil <- result.map(
+    list.map(named, check_element_name(analyzer, context, relations, columns, _))
+    |> collect_all
+    |> result.replace(Nil),
+  )
+  list.map(columns, fn(typed) {
+    TypedColumn(
+      ..typed,
+      elements_promised: list.any(named, fn(hinted) {
+        hinted.name == typed.column.name
+      }),
+    )
+  })
+}
+
+fn check_element_name(
+  analyzer: Analyzer,
+  context: Context,
+  relations: List(String),
+  columns: List(TypedColumn),
+  hinted: query_hint.NamedLine,
+) -> Result(Nil, Problem) {
+  let problem = fn(message) {
+    Problem(file: context.file, line: hinted.line, message:)
+  }
+  let start = "hint 'not null elements: " <> hinted.name <> "' "
+  case list.find(columns, fn(typed) { typed.column.name == hinted.name }) {
+    Ok(TypedColumn(gleam_type: gleam_type.ListType(_), ..)) -> Ok(Nil)
+    Ok(typed) ->
+      Error(problem(
+        start
+        <> "names a column that is not an array: its Gleam type is "
+        <> gleam_type.type_text(typed.gleam_type)
+        <> "; the hint is only for array columns",
+      ))
+    Error(Nil) ->
+      Error(problem(
+        start <> missing_column_text(analyzer, relations, columns, hinted.name),
+      ))
+  }
+}
+
+/// Tells why a name is not a result column: it is a column of a table that
+/// the statement reads but does not return, or no column at all.
+fn missing_column_text(
+  analyzer: Analyzer,
+  relations: List(String),
+  columns: List(TypedColumn),
+  name: String,
+) -> String {
+  let found =
+    nullability.execute(analyzer, relation_column_sql, [
+      Some(fingerprint.text_array_literal(relations)),
+      Some(name),
+    ])
+    |> result.unwrap([])
+    |> list.flat_map(option.values)
+  let result_text = case columns {
+    [] -> "the statement returns no columns"
+    _ -> "the result columns are " <> column_list(columns)
+  }
+  case found {
+    [] -> "names an unknown column; " <> result_text
+    tables ->
+      "names "
+      <> string.join(tables, ", ")
+      <> ", which is not in the result of the statement; return it, or remove it from the hint ("
+      <> result_text
+      <> ")"
+  }
 }
 
 fn check_duplicate_fields(
@@ -706,6 +808,7 @@ fn resolve_arguments(
       })
     })
     |> collect_all
+    |> result.try(refuse_numeric_arrays(context, parameters, _))
   case named, typed {
     Ok(names), Ok(types) ->
       Ok(
@@ -721,6 +824,39 @@ fn resolve_arguments(
       )
     _, _ -> Error(list.append(error_list(named), error_list(typed)))
   }
+}
+
+/// Refuses an array of `numeric` as a parameter. A `numeric` parameter is
+/// sent as text, and the driver sends an array in binary, where a `numeric`
+/// element as text is not possible.
+fn refuse_numeric_arrays(
+  context: Context,
+  parameters: List(Parameter),
+  types: List(GleamType),
+) -> Result(List(GleamType), List(Problem)) {
+  list.zip(parameters, types)
+  |> list.map(fn(pair) {
+    case pair {
+      #(parameter, gleam_type.ListType(element)) ->
+        case gleam_type.has_numeric(element) {
+          True -> {
+            let placeholder = "$" <> int.to_string(parameter.position)
+            Error(Problem(
+              file: context.file,
+              line: parameter_line(context, parameter.position),
+              message: "the parameter "
+                <> placeholder
+                <> " is an array of numeric, which dream_model cannot send exactly; take a text array and cast it in the SQL, for example "
+                <> placeholder
+                <> "::text[]::numeric[], and the parameter is a List(Option(String))",
+            ))
+          }
+          False -> Ok(pair.1)
+        }
+      #(_, other) -> Ok(other)
+    }
+  })
+  |> collect_all
 }
 
 fn name_parameters(

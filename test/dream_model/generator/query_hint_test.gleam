@@ -39,6 +39,7 @@ fn parse_tests() {
             unique: [],
             parameters_line: None,
             column_names: [],
+            element_names: [],
           ),
         ),
       )
@@ -47,7 +48,7 @@ fn parse_tests() {
     it("reads every hint with its line", fn() {
       // Arrange
       let sql =
-        "-- Returns: One User\n  -- NOT FOUND: No such user \n-- unique users_email_key: Email already taken\n-- unique users_pkey: Id taken\n-- not null: a, b\n-- nullable: c\n-- params: id\n-- other: x\nselect 1"
+        "-- Returns: One User\n  -- NOT FOUND: No such user \n-- unique users_email_key: Email already taken\n-- unique users_pkey: Id taken\n-- not null: a, b\n-- nullable: c\n-- params: id\n-- other: x\n-- Not Null Elements: tags, , scores\n-- not null elements: labels\nselect 1"
 
       // Act
       let hints = query_hint.parse(sql)
@@ -70,6 +71,11 @@ fn parse_tests() {
               NamedLine("b", 5),
               NamedLine("c", 6),
             ],
+            element_names: [
+              NamedLine("tags", 9),
+              NamedLine("scores", 9),
+              NamedLine("labels", 10),
+            ],
           ),
         ),
       )
@@ -78,7 +84,7 @@ fn parse_tests() {
     it("reads only the comment block at the top of the file", fn() {
       // Arrange
       let sql =
-        "-- returns: many\n\nselect email\n-- returns: one User\n-- unique users_email_key: Taken\nfrom users"
+        "-- returns: many\n\nselect email\n-- returns: one User\n-- unique users_email_key: Taken\n-- not null elements: tags\nfrom users"
 
       // Act
       let hints = query_hint.parse(sql)
@@ -94,6 +100,7 @@ fn parse_tests() {
             unique: [],
             parameters_line: None,
             column_names: [],
+            element_names: [],
           ),
         ),
       )

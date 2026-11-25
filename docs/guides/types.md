@@ -1,10 +1,11 @@
 # Types
 
-dream_model gives each column and each parameter a Gleam type from its PostgreSQL type. This guide gives the type of each PostgreSQL type, shows arrays and the values `infinity` and `-infinity`, and tells what to do with a type that dream_model does not support.
+dream_model gives each column and each parameter a Gleam type from its PostgreSQL type. This guide gives the type of each PostgreSQL type, shows exact numbers, arrays and the values `infinity` and `-infinity`, and tells what to do with a type that dream_model does not support.
 
 ## Table of Contents
 
 - [The type of each PostgreSQL type](#the-type-of-each-postgresql-type)
+- [Exact numbers](#exact-numbers)
 - [Arrays](#arrays)
 - [Infinity](#infinity)
 - [Types that need a cast](#types-that-need-a-cast)
@@ -16,7 +17,7 @@ dream_model gives each column and each parameter a Gleam type from its PostgreSQ
 | --- | --- | --- | --- |
 | `int2`, `int4`, `int8`, `oid` | `Int` | `decode.int` | `client.int` |
 | `float4`, `float8` | `Float` | `decode.float` | `client.float` |
-| `numeric` | `Float` | `client.numeric_decoder()` | `client.float` |
+| `numeric` | `String`, the exact text of the number | `client.numeric_text_decoder()` | `client.numeric_text` |
 | `text`, `varchar`, `bpchar`, `name`, `citext`, `json`, `jsonb`, an enum | `String` | `decode.string` | `client.text` |
 | `bool` | `Bool` | `decode.bool` | `client.bool` |
 | `bytea` | `BitArray` | `decode.bit_array` | `client.bytea` |
@@ -25,7 +26,7 @@ dream_model gives each column and each parameter a Gleam type from its PostgreSQ
 | `timestamptz` | `client.Timestamp` | `client.finite_timestamp(client.timestamp_with_time_zone_decoder(), ...)` | `client.timestamp` |
 | `date` | `client.Date` | `client.finite_date(client.calendar_date_decoder(), ...)` | `client.calendar_date` |
 | `time` | `client.TimeOfDay` | `client.calendar_time_of_day_decoder()` | `client.calendar_time_of_day` |
-| an array of a supported type | `List(Option(T))` | `decode.list(decode.optional(...))` | `client.array(client.nullable(..., _), _)` |
+| an array of a supported type | `List(Option(T))`, or `List(T)` with the `-- not null elements:` hint | `decode.list(decode.optional(...))` | `client.array(client.nullable(..., _), _)`, but not for `numeric[]` |
 | a domain | the type of its base type | | |
 
 `client.Timestamp`, `client.Date` and `client.TimeOfDay` are the types of `gleam/time`. The generated module names them through `dream_postgres/client`, so it imports no `gleam_time` module.
@@ -77,7 +78,7 @@ pub type Sample {
     object: Option(Int),
     real_number: Option(Float),
     double_number: Option(Float),
-    amount: Option(Float),
+    amount: Option(String),
     label: Option(String),
     code: Option(String),
     short_name: Option(String),
@@ -99,11 +100,112 @@ pub type Sample {
 }
 ```
 
+## Exact numbers
+
+A `numeric` value is a `String`: the exact text of the number, the same text as `value::text` in PostgreSQL. A `Float` cannot hold every `numeric`, for example `0.1` or a number with 30 digits, and it loses the scale, so `1.50` became `1.5`. The text keeps every digit, the scale and the trailing zeros, and also `NaN`, `Infinity` and `-Infinity`. Parse the text in the app, for example with a decimal package, when you need to calculate.
+
+This applies to a result column, to a parameter, to an element of an array, and to a domain over `numeric`. No cast and no hint is necessary. A query with a `numeric` result column calls `client.numeric_as_text`, and the decoder is `client.numeric_text_decoder()`. A parameter is sent as text with `client.numeric_text`, and PostgreSQL parses it:
+
+### A numeric parameter and a numeric column <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample/echo_amount.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+-- returns: one
+-- params: amount
+-- not null: exact
+select $1::numeric as exact
+```
+
+### The generated function <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L66-L85"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+/// Generated from echo_amount.sql.
+pub fn echo_amount(
+  db: client.Connection,
+  amount: String,
+) -> Result(String, Error) {
+  "select $1::numeric as exact"
+  |> client.query
+  |> client.parameter(client.numeric_text(amount))
+  |> client.numeric_as_text
+  |> client.returning(decode.at(
+    [0],
+    client.promised_not_null(
+      client.numeric_text_decoder(),
+      "src/app/models/sample/echo_amount.sql",
+      "exact",
+    ),
+  ))
+  |> client.execute(db)
+  |> one_row("sample.echo_amount", "Sample not found", [])
+}
+```
+
+The end-to-end app sends each text and compares the result with it. Each one comes back exactly:
+
+### Exact round trips <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L37-L43"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+| sample.echo_amount of 1.50: Ok(#("1.50", True))
+| sample.echo_amount of 123456789012345678901234567890.123456789012345678901234567890: Ok(#("123456789012345678901234567890.123456789012345678901234567890", True))
+| sample.echo_amount of 0.000000000000000000000000000000000000000000000000001: Ok(#("0.000000000000000000000000000000000000000000000000001", True))
+| sample.echo_amount of -42.10: Ok(#("-42.10", True))
+| sample.echo_amount of NaN: Ok(#("NaN", True))
+| sample.echo_amount of Infinity: Ok(#("Infinity", True))
+| sample.echo_amount of -Infinity: Ok(#("-Infinity", True))
+```
+
+A text that is not a number fails in PostgreSQL with the error `22P02` (`invalid input syntax for type numeric`), and the function gives `InternalServerError` (500), as for every other database error. [Errors](errors.md#a-numeric-text-that-is-not-a-number) tells why, and how to check the text first.
+
+### An array of numeric as a parameter
+
+The driver sends an array in binary, and a `numeric` element as text is not possible there. So dream_model refuses a `numeric[]` parameter, with the file and the line of the parameter:
+
+`the parameter $1 is an array of numeric, which dream_model cannot send exactly; take a text array and cast it in the SQL, for example $1::text[]::numeric[], and the parameter is a List(Option(String))`
+
+Cast a text array in the SQL. The parameter is then a `text[]`, so the function takes a `List(Option(String))`, and PostgreSQL parses each element. A `numeric[]` result column needs no cast: each element is read as exact text.
+
+### Send an array of numbers as text <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample/amounts.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+-- returns: one
+-- params: amounts
+select $1::text[]::numeric[] as amounts
+```
+
+### The generated function of the cast <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L49-L64"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+/// Generated from amounts.sql.
+pub fn amounts(
+  db: client.Connection,
+  amounts: List(Option(String)),
+) -> Result(Option(List(Option(String))), Error) {
+  "select $1::text[]::numeric[] as amounts"
+  |> client.query
+  |> client.parameter(client.array(client.nullable(client.text, _), amounts))
+  |> client.numeric_as_text
+  |> client.returning(decode.at(
+    [0],
+    decode.optional(decode.list(decode.optional(client.numeric_text_decoder()))),
+  ))
+  |> client.execute(db)
+  |> one_row("sample.amounts", "Sample not found", [])
+}
+```
+
+### The array round trip <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L45"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+| sample.amounts of a text array: Ok(Some([Some("1.50"), None, Some("-0.001")]))
+```
+
+The cast takes the parameter out of a store, so dream_model cannot name it from a column, and the parameter is required. The `-- params:` hint names it. Write `-- params: amounts?` to make it `Option`.
+
 ## Arrays
 
-PostgreSQL never forbids a NULL element in an array. A NOT NULL constraint on an array column forbids only a NULL array. So each element of a `List` is an `Option`, and no hint changes that. An array column that can be NULL is `Option(List(Option(T)))`.
+PostgreSQL never forbids a NULL element in an array. A NOT NULL constraint on an array column forbids only a NULL array. So each element of a `List` is an `Option`. An array column that can be NULL is `Option(List(Option(T)))`.
 
-### Read an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L176-L179"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Read an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L235-L238"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
   use tags <- decode.field(
@@ -112,7 +214,7 @@ PostgreSQL never forbids a NULL element in an array. A NOT NULL constraint on an
   )
 ```
 
-### Send an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L120-L123"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Send an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L159-L162"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
   |> client.parameter(client.nullable(
@@ -129,7 +231,49 @@ The end-to-end app stores `["a", NULL]` and reads it back:
 | array with a NULL element round trip: Ok(True)
 ```
 
-To get `List(String)`, drop the NULL elements in the query, for example `array_remove(tags, null)`. The value is then a computed value, so it is `Option` unless you promise it with `-- not null:`. The elements stay `Option`.
+To get `List(String)`, promise that the elements are never NULL with the `-- not null elements:` hint. The generated code checks the promise on each row: a NULL element gives `InternalServerError` (500) with a message that names the file and the column. The hint is only about the elements. A column that can be NULL stays `Option`, so `tags` is an `Option(List(String))`:
+
+### Promise the elements of an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample/tags.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+-- returns: one
+-- not null elements: tags
+select tags from samples where id = $1
+```
+
+### The generated function of the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L175-L193"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+/// Generated from tags.sql.
+pub fn tags(
+  db: client.Connection,
+  id: Int,
+) -> Result(Option(List(String)), Error) {
+  "select tags from samples where id = $1"
+  |> client.query
+  |> client.parameter(client.int(id))
+  |> client.returning(decode.at(
+    [0],
+    decode.optional(client.promised_elements_not_null(
+      decode.string,
+      "src/app/models/sample/tags.sql",
+      "tags",
+    )),
+  ))
+  |> client.execute(db)
+  |> one_row("sample.tags", "Sample not found", [])
+}
+```
+
+### A NULL element breaks the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L47-L49"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+| sample.tags with a NULL element: 500 the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL
+| sample.tags with no NULL element: Ok(Some(["a", "b"]))
+| sample.tags of a NULL array: Ok(None)
+```
+
+[Hints](hints.md#not-null-elements) gives the rules of the hint. To drop the NULL elements instead, use `array_remove(tags, null)` in the query and promise the elements.
 
 ## Infinity
 

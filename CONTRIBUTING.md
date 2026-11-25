@@ -2,9 +2,9 @@
 
 ## Set up the packages that are not on Hex yet
 
-dream_model needs dream_postgres 2.1.0. The end-to-end app in `e2e/model_app` also needs Dream 3.0.0 and dream_model itself. Until dream_postgres 2.1.0 and Dream 3.0.0 are on Hex, the build uses local copies of these packages, and CI fails at `gleam deps download`.
+dream_model needs dream_postgres 2.1.0, with dream_postgres_client 1.1.0 and dream_postgres_driver 1.1.0, which read and write a `numeric` as exact text. The end-to-end app in `e2e/model_app` also needs Dream 3.0.0 and dream_model itself. Until dream_postgres 2.1.0 and Dream 3.0.0 are on Hex, the build uses local copies of these packages, and CI fails at `gleam deps download`.
 
-1. Clone dream_postgres and check out the branch with version 2.1.0. Run `gleam build` there, so that its `build/packages` holds its Hex packages.
+1. Clone dream_postgres and check out the branch with version 2.1.0. Run `gleam build` there, so that its `build/packages` holds dream_postgres_client 1.1.0, dream_postgres_driver 1.1.0 and the other packages of dream_postgres.
 2. Clone Dream, and run `gleam build` in a checkout of the Dream 3.0.0 commit, so that its `build/packages` holds the Hex packages of Dream.
 3. Run `sh scripts/stand-ins.sh` in this repository. Set `DREAM_POSTGRES_SOURCE`, `DREAM_SOURCE`, `DREAM_COMMIT` and `DREAM_PACKAGES` when the clones are not next to this repository. The script lists each variable.
 
@@ -12,7 +12,7 @@ The script copies each package into `build/packages` and into `build/e2e/model_a
 
 CI runs `sh scripts/e2e-packages.sh` for the end-to-end app. It puts the dream_model of the checkout into the packages of the app and downloads the other packages from Hex, so it works when dream_postgres 2.1.0 and Dream 3.0.0 are on Hex.
 
-When both packages are on Hex, remove `scripts/stand-ins.sh` and this section, and run `gleam deps update dream_postgres` here and `gleam deps update dream dream_postgres dream_model` in `e2e/model_app`, to write the real checksums.
+When these packages are on Hex, remove `scripts/stand-ins.sh` and this section, and run `gleam deps update dream_postgres dream_postgres_client dream_postgres_driver` here and `gleam deps update dream dream_postgres dream_postgres_client dream_postgres_driver dream_model` in `e2e/model_app`, to write the real checksums.
 
 ## Run the tests
 

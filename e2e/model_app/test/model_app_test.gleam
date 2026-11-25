@@ -135,6 +135,46 @@ fn check_infinity(db: client.Connection) -> Nil {
   run(db, "update samples set day = null where id = 1")
 }
 
+/// Sends each numeric text to PostgreSQL and reads it back: the text must
+/// come back exactly, with its scale and its trailing zeros.
+fn check_numeric(db: client.Connection) -> Nil {
+  [
+    "1.50", "123456789012345678901234567890.123456789012345678901234567890",
+    "0.000000000000000000000000000000000000000000000000001", "-42.10", "NaN",
+    "Infinity", "-Infinity",
+  ]
+  |> list.each(fn(text) {
+    show(
+      "sample.echo_amount of " <> text,
+      sample.echo_amount(db, text)
+        |> result.map(fn(exact) { #(exact, exact == text) }),
+    )
+  })
+  show_error(
+    "sample.echo_amount of text that is not a number",
+    sample.echo_amount(db, "12,50"),
+  )
+  show(
+    "sample.amounts of a text array",
+    sample.amounts(db, [Some("1.50"), None, Some("-0.001")]),
+  )
+  run(db, "update samples set amount = 99999999999999999999.99 where id = 1")
+  show(
+    "sample.get of a large amount",
+    sample.get(db, 1) |> result.map(fn(found) { found.amount }),
+  )
+}
+
+/// Reads the tags of row 1 with the promise that no element is NULL: first
+/// with a NULL element, then with none, then with no array.
+fn check_element_promise(db: client.Connection) -> Nil {
+  show_error("sample.tags with a NULL element", sample.tags(db, 1))
+  run(db, "update samples set tags = '{a,b}' where id = 1")
+  show("sample.tags with no NULL element", sample.tags(db, 1))
+  run(db, "update samples set tags = null where id = 1")
+  show("sample.tags of a NULL array", sample.tags(db, 1))
+}
+
 fn run(db: client.Connection, sql: String) -> Nil {
   let assert Ok(_) =
     sql
@@ -158,7 +198,7 @@ fn check_samples(db: client.Connection) -> Nil {
       Some(42),
       Some(1.5),
       Some(2.25),
-      Some(12.5),
+      Some("12.50"),
       Some("first"),
       Some("abc"),
       Some("short"),
@@ -190,6 +230,8 @@ fn check_samples(db: client.Connection) -> Nil {
       |> result.map(fn(found) { found.tags == Some([Some("a"), None]) }),
   )
   check_infinity(db)
+  check_numeric(db)
+  check_element_promise(db)
   show_error(
     "sample.insert of a taken label",
     sample.insert(

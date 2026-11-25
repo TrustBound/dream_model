@@ -10,6 +10,7 @@ Each generated function returns `Result(row, dream/http/error.Error)`. The error
 - [More than one row](#more-than-one-row)
 - [Broken promise](#broken-promise)
 - [Infinite value](#infinite-value)
+- [A numeric text that is not a number](#a-numeric-text-that-is-not-a-number)
 - [Every other failure](#every-other-failure)
 - [Answer with the error](#answer-with-the-error)
 - [Where to go next](#where-to-go-next)
@@ -22,7 +23,9 @@ Each generated function returns `Result(row, dream/http/error.Error)`. The error
 | A `unique` hint names the violated constraint | `Conflict` (409) | The text of the hint |
 | `returns: one` or `maybe` gets more than one row | `InternalServerError` (500) | `<model>.<function> returned more than one row` |
 | A `not null` column is NULL | `InternalServerError` (500) | `the SQL file <file> promised the column <column> is never NULL, and PostgreSQL returned NULL` |
+| A `not null elements` array holds a NULL element | `InternalServerError` (500) | `the SQL file <file> promised the elements of <column> are never NULL, and PostgreSQL returned NULL` |
 | A time or date column holds infinity | `InternalServerError` (500) | `<model>.<function>: the column <column> holds infinity, which the Gleam type Timestamp cannot hold` |
+| A `numeric` parameter is not a number | `InternalServerError` (500) | `<model>.<function> failed` |
 | Any other failure | `InternalServerError` (500) | `<model>.<function> failed` |
 
 `<model>.<function>` is the last part of the module name and the name of the function, for example `user.find`. No text holds SQL, a parameter or a value of a row.
@@ -106,6 +109,16 @@ A `-- not null:` hint promises that a computed column is never NULL. The decoder
 
 Fix the query, for example with `coalesce(sum(id), 0)`, and remove the hint.
 
+A `-- not null elements:` hint promises that an array has no NULL element. The decoder checks each element on each row, and a NULL element gives `InternalServerError` with a text that names the file and the column. A NULL array is not an element: it is `None` when the column can be NULL.
+
+### A NULL element of a promised array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L47"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+| sample.tags with a NULL element: 500 the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL
+```
+
+Drop the NULL elements in the query with `array_remove(tags, null)`, or remove the hint.
+
 ## Infinite value
 
 A `timestamp`, `timestamptz` or `date` column can hold `infinity` or `-infinity`, which a Gleam `Timestamp` or `Date` cannot hold. The function gives `InternalServerError` with the name of the function, the column and the Gleam type:
@@ -120,11 +133,23 @@ A `timestamp`, `timestamptz` or `date` column can hold `infinity` or `-infinity`
 
 The [Types](types.md#infinity) guide shows how to change the query.
 
+## A numeric text that is not a number
+
+A `numeric` parameter is a `String`, and PostgreSQL parses it. A text that is not a number, for example `12,50`, fails with the PostgreSQL error `22P02` (`invalid input syntax for type numeric`). The function gives `InternalServerError` with the text `<model>.<function> failed`, as for every other database error:
+
+### A numeric text with a comma <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L44"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+| sample.echo_amount of text that is not a number: 500 sample.echo_amount failed
+```
+
+The generated module cannot tell if the text came from a client or from the app, so it does not give a 400. When the text comes from a request, check it in the controller before the call, and answer with your own 400. The texts that PostgreSQL accepts are a sign, digits with one optional `.`, an optional exponent such as `e-3`, and `NaN`, `Infinity` and `-Infinity`, with any case.
+
 ## Every other failure
 
 Every other error gives `InternalServerError` with the text `<model>.<function> failed`: a connection error, a timeout, a foreign key violation, a check violation, a unique violation with no hint, and so on. The text holds no SQL and no data, so it is safe to send to the client. Log the error in your app if you need the details: call the query yourself with `dream_postgres/client`.
 
-### A delete that a foreign key stops <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L38"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### A delete that a foreign key stops <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L51"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 | user.delete of a user with posts: 500 user.delete failed
@@ -150,5 +175,5 @@ pub fn show(db: client.Connection, id: Int) -> Response {
 
 ## Where to go next
 
-- [Hints](hints.md): `not found`, `unique` and `not null`
-- [Types](types.md): infinity and the other values that a Gleam type cannot hold
+- [Hints](hints.md): `not found`, `unique`, `not null` and `not null elements`
+- [Types](types.md): exact numbers, infinity and the other values that a Gleam type cannot hold

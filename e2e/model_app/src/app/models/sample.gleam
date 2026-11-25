@@ -25,7 +25,7 @@ pub type Sample {
     object: Option(Int),
     real_number: Option(Float),
     double_number: Option(Float),
-    amount: Option(Float),
+    amount: Option(String),
     label: Option(String),
     code: Option(String),
     short_name: Option(String),
@@ -46,6 +46,44 @@ pub type Sample {
   )
 }
 
+/// Generated from amounts.sql.
+pub fn amounts(
+  db: client.Connection,
+  amounts: List(Option(String)),
+) -> Result(Option(List(Option(String))), Error) {
+  "select $1::text[]::numeric[] as amounts"
+  |> client.query
+  |> client.parameter(client.array(client.nullable(client.text, _), amounts))
+  |> client.numeric_as_text
+  |> client.returning(decode.at(
+    [0],
+    decode.optional(decode.list(decode.optional(client.numeric_text_decoder()))),
+  ))
+  |> client.execute(db)
+  |> one_row("sample.amounts", "Sample not found", [])
+}
+
+/// Generated from echo_amount.sql.
+pub fn echo_amount(
+  db: client.Connection,
+  amount: String,
+) -> Result(String, Error) {
+  "select $1::numeric as exact"
+  |> client.query
+  |> client.parameter(client.numeric_text(amount))
+  |> client.numeric_as_text
+  |> client.returning(decode.at(
+    [0],
+    client.promised_not_null(
+      client.numeric_text_decoder(),
+      "src/app/models/sample/echo_amount.sql",
+      "exact",
+    ),
+  ))
+  |> client.execute(db)
+  |> one_row("sample.echo_amount", "Sample not found", [])
+}
+
 /// Generated from get.sql.
 pub fn get(db: client.Connection, id: Int) -> Result(Sample, Error) {
   "select
@@ -55,6 +93,7 @@ pub fn get(db: client.Connection, id: Int) -> Result(Sample, Error) {
 from samples where id = $1"
   |> client.query
   |> client.parameter(client.int(id))
+  |> client.numeric_as_text
   |> client.returning(sample_decoder())
   |> client.execute(db)
   |> one_row("sample.get", "Sample not found", [])
@@ -68,7 +107,7 @@ pub fn insert(
   object: Option(Int),
   real_number: Option(Float),
   double_number: Option(Float),
-  amount: Option(Float),
+  amount: Option(String),
   label: Option(String),
   code: Option(String),
   short_name: Option(String),
@@ -102,7 +141,7 @@ returning id"
   |> client.parameter(client.nullable(client.int, object))
   |> client.parameter(client.nullable(client.float, real_number))
   |> client.parameter(client.nullable(client.float, double_number))
-  |> client.parameter(client.nullable(client.float, amount))
+  |> client.parameter(client.nullable(client.numeric_text, amount))
   |> client.parameter(client.nullable(client.text, label))
   |> client.parameter(client.nullable(client.text, code))
   |> client.parameter(client.nullable(client.text, short_name))
@@ -133,6 +172,26 @@ returning id"
   ])
 }
 
+/// Generated from tags.sql.
+pub fn tags(
+  db: client.Connection,
+  id: Int,
+) -> Result(Option(List(String)), Error) {
+  "select tags from samples where id = $1"
+  |> client.query
+  |> client.parameter(client.int(id))
+  |> client.returning(decode.at(
+    [0],
+    decode.optional(client.promised_elements_not_null(
+      decode.string,
+      "src/app/models/sample/tags.sql",
+      "tags",
+    )),
+  ))
+  |> client.execute(db)
+  |> one_row("sample.tags", "Sample not found", [])
+}
+
 fn sample_decoder() -> decode.Decoder(Sample) {
   use id <- decode.field(0, decode.int)
   use small <- decode.field(1, decode.optional(decode.int))
@@ -140,7 +199,7 @@ fn sample_decoder() -> decode.Decoder(Sample) {
   use object <- decode.field(3, decode.optional(decode.int))
   use real_number <- decode.field(4, decode.optional(decode.float))
   use double_number <- decode.field(5, decode.optional(decode.float))
-  use amount <- decode.field(6, decode.optional(client.numeric_decoder()))
+  use amount <- decode.field(6, decode.optional(client.numeric_text_decoder()))
   use label <- decode.field(7, decode.optional(decode.string))
   use code <- decode.field(8, decode.optional(decode.string))
   use short_name <- decode.field(9, decode.optional(decode.string))

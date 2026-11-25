@@ -5,7 +5,7 @@
 //// | --- | --- |
 //// | `int2`, `int4`, `int8`, `oid` | `Int` |
 //// | `float4`, `float8` | `Float` |
-//// | `numeric` | `Float` (`client.numeric_decoder()`) |
+//// | `numeric` | `String`, the exact text of `value::text` (`client.numeric_text_decoder()`) |
 //// | `text`, `varchar`, `bpchar`, `name`, `citext`, `json`, `jsonb`, enums | `String` |
 //// | `bool` | `Bool` |
 //// | `bytea`, `uuid` | `BitArray` (a `uuid` is its 16 bytes) |
@@ -16,8 +16,17 @@
 ////
 //// A domain has the type of its base type. Every other type is refused.
 ////
+//// A query with a `numeric` result column, also in an array or a domain,
+//// reads each `numeric` value as text (`client.numeric_as_text`). A
+//// `numeric` parameter is sent as text (`client.numeric_text`), which
+//// PostgreSQL parses. An array of `numeric` cannot be a parameter: the
+//// driver sends an array in binary, and a `numeric` element as text is not
+//// possible there. The SQL can take a `text[]` and cast it, as
+//// `$1::text[]::numeric[]`.
+////
 //// PostgreSQL never forbids a NULL element in an array, so each element of
-//// a `List` is an `Option`. A `timestamp`, `timestamptz` or `date` value
+//// a `List` is an `Option`, unless a `-- not null elements:` hint promised
+//// that the elements are never NULL. A `timestamp`, `timestamptz` or `date` value
 //// can be `infinity` or `-infinity`, which a `Timestamp` or a `Date`
 //// cannot hold: the decoder fails such a value with a message that names
 //// the column.
@@ -34,7 +43,8 @@ import gleam/string
 pub type GleamType {
   IntType
   FloatType
-  /// A `numeric`: a `Float`, read with `client.numeric_decoder()`.
+  /// A `numeric`: a `String`, the exact text of the number, read with
+  /// `client.numeric_text_decoder()`.
   NumericType
   StringType
   BoolType
@@ -156,14 +166,30 @@ fn resolve_base(facts: TypeFacts) -> Result(GleamType, String) {
 pub fn type_text(gleam_type: GleamType) -> String {
   case gleam_type {
     IntType -> "Int"
-    FloatType | NumericType -> "Float"
-    StringType -> "String"
+    FloatType -> "Float"
+    StringType | NumericType -> "String"
     BoolType -> "Bool"
     BitArrayType -> "BitArray"
     TimestampType | TimestampWithTimeZoneType -> "client.Timestamp"
     DateType -> "client.Date"
     TimeOfDayType -> "client.TimeOfDay"
     ListType(element) -> "List(Option(" <> type_text(element) <> "))"
+  }
+}
+
+/// Returns the type of an array whose elements a `-- not null elements:`
+/// hint promised are never NULL, for example `List(String)`.
+pub fn promised_list_text(element: GleamType) -> String {
+  "List(" <> type_text(element) <> ")"
+}
+
+/// Returns True for a `numeric`, also as the element of an array. A query
+/// with such a result column needs `client.numeric_as_text`.
+pub fn has_numeric(gleam_type: GleamType) -> Bool {
+  case gleam_type {
+    NumericType -> True
+    ListType(element) -> has_numeric(element)
+    _ -> False
   }
 }
 
@@ -175,7 +201,7 @@ pub fn decoder_text(gleam_type: GleamType, column_literal: String) -> String {
   case gleam_type {
     IntType -> "decode.int"
     FloatType -> "decode.float"
-    NumericType -> "client.numeric_decoder()"
+    NumericType -> "client.numeric_text_decoder()"
     StringType -> "decode.string"
     BoolType -> "decode.bool"
     BitArrayType -> "decode.bit_array"
@@ -214,7 +240,8 @@ fn finite(wrapper: String, decoder: String, column_literal: String) -> String {
 pub fn encoder_text(gleam_type: GleamType) -> String {
   case gleam_type {
     IntType -> "client.int"
-    FloatType | NumericType -> "client.float"
+    FloatType -> "client.float"
+    NumericType -> "client.numeric_text"
     StringType -> "client.text"
     BoolType -> "client.bool"
     BitArrayType -> "client.bytea"

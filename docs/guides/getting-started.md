@@ -205,7 +205,7 @@ pub fn check_models(db: client.Connection) -> Result(Nil, String) {
 
 When a migration changed a table after the generation, `check_models` returns an error. Stop the app with that message, and generate the modules again:
 
-### The message after a new column <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L39"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The message after a new column <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L52"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 | startup.check_models after a new column: Error("The database schema changed after dream_model generated these modules. Regenerate them with dream_model:")

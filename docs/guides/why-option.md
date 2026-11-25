@@ -30,7 +30,7 @@ A result column is not `Option` when one of these rules proves it:
 | `IS DISTINCT FROM with a built-in operator is never NULL` | `select nickname is distinct from 'x' as other from users` |
 | `not null hint, checked on every row` | `-- not null: total` |
 
-Every other column is `Option`, for one of the reasons below. A parameter is required, unless one of the rules in [Parameters that are Option](#parameters-that-are-option) makes it `Option`.
+Every other column is `Option`, for one of the reasons below. The rules decide the column, not the elements of an array: each element of an array is `Option`, also in a NOT NULL array column, because PostgreSQL never forbids a NULL element. The `-- not null elements: tags` hint promises that the elements are never NULL, and the decoder checks each row. See [Hints](hints.md#not-null-elements). A parameter is required, unless one of the rules in [Parameters that are Option](#parameters-that-are-option) makes it `Option`.
 
 The examples use the tables of the attack tests: `users` (`email` NOT NULL, `nickname` NULL, and a BEFORE INSERT trigger), `posts` (`title` NOT NULL) and the other tables that each section names. The tests run each example on PostgreSQL 16, 17, 18 and 19, or from the version that the section names.
 
@@ -439,7 +439,7 @@ returning id
 
 ### the statement writes into relation kind v (a view with an INSTEAD OF trigger or a foreign table), which may reject NULL
 
-The statement writes into a relation that is not a table: a view with an `INSTEAD OF` trigger (`v`), or a foreign table (`f`). A partition or a child table that is a foreign table gives the same reason for its kind. dream_model cannot read what the trigger or the remote server accepts, so each stored parameter is required.
+The statement writes into a relation that is not a table: a view with an `INSTEAD OF` trigger (`v`), or a foreign table (`f`). A partition or a child table that is a foreign table gives the same reason for its kind. dream_model cannot read what the trigger or the remote server accepts, so each stored parameter is required. PostgreSQL does not enforce a NOT NULL or a CHECK of a foreign table, so this reason comes first, also for such a column.
 
 #### A view with an INSTEAD OF trigger <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_view_trigger.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -456,5 +456,5 @@ The rules also have reasons for a tree that they cannot trace: `column not found
 
 ## Where to go next
 
-- [Hints](hints.md): `not null`, `nullable` and `params`
+- [Hints](hints.md): `not null`, `not null elements`, `nullable` and `params`
 - [Types](types.md): the Gleam type of each column

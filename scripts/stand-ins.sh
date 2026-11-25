@@ -2,21 +2,25 @@
 # Puts local copies of the packages that are not on Hex yet into the build
 # folders, so that the build and the tests run with no Hex request.
 #
-# dream_model needs dream_postgres 2.1.0, and the end-to-end app in
-# e2e/model_app needs dream_postgres 2.1.0, Dream 3.0.0 and dream_model
+# dream_model needs dream_postgres 2.1.0, which needs dream_postgres_client
+# 1.1.0 and dream_postgres_driver 1.1.0 (the exact text of numeric). The
+# end-to-end app in e2e/model_app also needs Dream 3.0.0 and dream_model
 # 1.0.0. manifest.toml and e2e/model_app/manifest.toml already name these
-# versions. Gleam does not
+# versions, with a checksum of zeros. Gleam does not
 # download a package that build/packages/packages.toml lists with the
 # version of the manifest, so this script copies each package and lists it.
 #
-# Remove this script when both packages are on Hex. Then run
-# `gleam deps update dream_postgres` here and in e2e/model_app to write the
+# Remove this script when these packages are on Hex. Then run
+# `gleam deps update dream_postgres dream_postgres_client
+# dream_postgres_driver` here and in e2e/model_app to write the
 # real checksums into the manifests.
 #
 # The sources (each one can be changed with an environment variable):
 #   DREAM_POSTGRES_SOURCE  a dream_postgres checkout at version 2.1.0,
 #                          after `gleam build` there (its build/packages
-#                          gives the Hex packages of dream_postgres)
+#                          gives dream_postgres_client 1.1.0,
+#                          dream_postgres_driver 1.1.0 and the other
+#                          packages of dream_postgres)
 #   DREAM_SOURCE           a git clone of Dream
 #   DREAM_COMMIT           the Dream commit of version 3.0.0
 #   DREAM_PACKAGES         a build/packages folder with the Hex packages of

@@ -17,13 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The NULL rules: a column or a parameter is `Option` only when it can be
   NULL. dream_model reads the schema and the analyzed query tree of
   PostgreSQL to decide.
-- The hints `returns`, `not found`, `unique`, `not null`, `nullable` and
-  `params`.
+- The hints `returns`, `not found`, `unique`, `not null`,
+  `not null elements`, `nullable` and `params`.
 - A unique hint whose name another index or constraint of the database
   also has, in any schema, is refused at generation time. PostgreSQL names
   a violation only by its constraint name.
 - An array column or parameter is `List(Option(T))`, because PostgreSQL
-  never forbids a NULL element.
+  never forbids a NULL element. The `-- not null elements: tags` hint
+  makes the elements of an array result column `List(T)`. The generated
+  code checks the promise on each row, and a NULL element gives a 500
+  that names the SQL file and the column. A column that can be NULL stays
+  `Option(List(T))`. The hint is refused for a column that is not an
+  array, a table column that is not in the result, and an unknown name.
+- A `numeric` column or parameter is a `String`: the exact text of the
+  number, the same text as `value::text` in PostgreSQL, with its scale,
+  its trailing zeros, `NaN`, `Infinity` and `-Infinity`. This also holds
+  for an element of an array and a domain over `numeric`. PostgreSQL
+  parses a parameter, and a text that is not a number gives the 500
+  `<model>.<function> failed`. A `numeric[]` parameter is refused,
+  because the driver sends an array in binary; cast a text array in the
+  SQL, as `$1::text[]::numeric[]`. This needs dream_postgres_client 1.1.0
+  and dream_postgres_driver 1.1.0.
 - A `timestamp`, `timestamptz` or `date` value of `infinity` or
   `-infinity` gives a 500 that names the function, the column and the
   Gleam type.
@@ -50,7 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A CHECK with a whole-row reference or with no column counts for every
   column. The trigger rule reads row-level `BEFORE` and `INSTEAD OF`
   triggers, the same bits as the fingerprint of dream_postgres.
-- A column of a foreign child table or partition is `Option`.
+- A column of a foreign child table or partition is `Option`. A foreign
+  table with a NOT NULL or a CHECK column gives the reason of the
+  relation kind, because PostgreSQL does not enforce them there.
 - Hints come only from the comment block at the top of the file.
 - The tables of a module include each view that its statements read, so
   a changed view definition changes the fingerprint. The fingerprint of
