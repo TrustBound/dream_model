@@ -1,3 +1,48 @@
+MERGE source without match	17	2f54a4ffcb37d2e2	ba57fb2	killed	6	
+NOT VALID NOT NULL	18	2f54a4ffcb37d2e2	ba57fb2	killed	4	
+RETURNING old/new row missing	18	2f54a4ffcb37d2e2	ba57fb2	killed	11	
 array elements: Option type	16	d884e708c2b0d9b2	caabd00	killed	-	carried over from caabd00
 array elements: nullable value function	16	d884e708c2b0d9b2	caabd00	killed	-	carried over from caabd00
 array elements: optional decoder	16	d884e708c2b0d9b2	caabd00	killed	-	carried over from caabd00
+computed value assumed not null	16	2f54a4ffcb37d2e2	ba57fb2	killed	58	
+fingerprint: views that a query reads	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
+foreign child table	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
+grouping sets empty a column	16	2f54a4ffcb37d2e2	ba57fb2	killed	14	
+grouping sets empty a column	17	2f54a4ffcb37d2e2	ba57fb2	killed	14	
+grouping-expression hazard	16	2f54a4ffcb37d2e2	ba57fb2	killed	19	
+hints: only the comment block at the top	16	47de5b2249a32845	ba57fb2	killed	3	
+inheritance child tables	18	2f54a4ffcb37d2e2	ba57fb2	killed	7	
+never-NULL EXISTS: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	1	
+never-NULL EXISTS: only EXISTS sublinks	16	2f54a4ffcb37d2e2	ba57fb2	killed	10	
+never-NULL IS DISTINCT FROM: built-in only	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
+never-NULL IS DISTINCT FROM: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	1	
+never-NULL IS [NOT] NULL: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
+never-NULL coalesce: last argument not NULL	16	2f54a4ffcb37d2e2	ba57fb2	killed	13	
+never-NULL coalesce: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	7	
+never-NULL constant: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	18	
+never-NULL constant: only non-NULL ones	16	2f54a4ffcb37d2e2	ba57fb2	killed	11	
+never-NULL count: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	12	
+never-NULL count: only count	16	2f54a4ffcb37d2e2	ba57fb2	killed	10	
+never-NULL count: only pg_catalog count	16	2f54a4ffcb37d2e2	ba57fb2	killed	4	
+outer-join nulling (varnullingrels)	16	2f54a4ffcb37d2e2	ba57fb2	killed	71	
+parameter store: any function is pass-through	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
+parameter store: column NOT NULL	16	2f54a4ffcb37d2e2	ba57fb2	killed	42	
+parameter store: length coercion is pass-through	16	2f54a4ffcb37d2e2	ba57fb2	killed	12	
+parameter store: used outside the store	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
+parameter: BEFORE trigger	16	2f54a4ffcb37d2e2	ba57fb2	killed	8	
+parameter: CHECK constraint	16	2f54a4ffcb37d2e2	ba57fb2	killed	6	
+parameter: a rule adds queries	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
+parameter: casts to a domain	16	2f54a4ffcb37d2e2	ba57fb2	killed	9	
+parameter: domain CHECK	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
+parameter: domain NOT NULL	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
+parameter: generated column	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
+parameter: partition CHECK	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
+parameter: partition NOT NULL	16	2f54a4ffcb37d2e2	ba57fb2	killed	5	
+parameter: partition is not a table	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
+parameter: partition key	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
+parameter: row-level security	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
+parameter: target is not a table	16	2f54a4ffcb37d2e2	ba57fb2	survived	0	
+parameter: view WITH CHECK OPTION	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
+parameter: whole-row CHECK	16	2f54a4ffcb37d2e2	ba57fb2	killed	4	
+trigger: INSTEAD OF row bit	16	4bd5f405e462aabb	ba57fb2	killed	1	
+trigger: statement-level BEFORE	16	4bd5f405e462aabb	ba57fb2	killed	1	
