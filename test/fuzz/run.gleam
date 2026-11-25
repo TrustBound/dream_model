@@ -56,9 +56,10 @@ type Analyzed {
   Analyzed(sql: String, analysis: nullability.Analysis)
 }
 
-/// The name of the database of a fuzz run.
+/// The name of the database of a fuzz run, with the prefix of
+/// `servers.database_name`.
 pub fn database(seed: Int) -> String {
-  "fuzz_" <> int.to_string(seed)
+  servers.database_name("fuzz_" <> int.to_string(seed))
 }
 
 /// Runs the fuzzer, and drops its database at the end.

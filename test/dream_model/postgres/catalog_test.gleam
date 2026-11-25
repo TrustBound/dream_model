@@ -219,7 +219,7 @@ fn catalog_case(
 ) {
   it(name, fn() {
     // Arrange
-    let connection = servers.connect(version, attack_database.database)
+    let connection = servers.connect(version, attack_database.database())
     let oids = read_oids(connection)
     let relations =
       names

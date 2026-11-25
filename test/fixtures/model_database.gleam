@@ -11,11 +11,17 @@ import fixtures/servers
 import gleam/result
 import simplifile
 
-/// The database of the generator tests on each server.
-pub const database = "dream_model_generator"
+/// The database of the generator tests on each server, with the prefix of
+/// `servers.database_name`.
+pub fn database() -> String {
+  servers.database_name("dream_model_generator")
+}
 
-/// The database of the end-to-end app on each server.
-pub const e2e_database = "dream_model_e2e"
+/// The database of the end-to-end app on each server, with the prefix of
+/// `servers.database_name`.
+pub fn e2e_database() -> String {
+  servers.database_name("dream_model_e2e")
+}
 
 /// The schema file of the end-to-end app.
 pub const e2e_schema_path = "e2e/model_app/schema.sql"
@@ -53,8 +59,8 @@ pub fn create(version: Int) -> Result(Nil, String) {
     simplifile.read(e2e_schema_path)
     |> result.map_error(simplifile.describe_error),
   )
-  use Nil <- result.try(recreate(version, database, schema <> extra_schema))
-  recreate(version, e2e_database, schema)
+  use Nil <- result.try(recreate(version, database(), schema <> extra_schema))
+  recreate(version, e2e_database(), schema)
 }
 
 /// Drops and creates one database and runs the schema in it.
@@ -83,5 +89,5 @@ pub fn recreate(
 
 /// Returns the URL of the generator database on the server of a version.
 pub fn url(version: Int) -> String {
-  servers.url(version, database)
+  servers.url(version, database())
 }

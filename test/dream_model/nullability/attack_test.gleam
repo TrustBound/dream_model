@@ -82,7 +82,7 @@ fn attack_tests(version: Int, attack: Attack) -> unit.UnitNode {
       let analyzer = connect(version)
       let assert Ok(#(analysis, _)) = nullability.analyze(analyzer, attack.sql)
       let _ = nullability.close(analyzer)
-      let connection = servers.connect(version, attack_database.database)
+      let connection = servers.connect(version, attack_database.database())
 
       // Act
       let outcome =
@@ -113,7 +113,7 @@ fn attack_tests(version: Int, attack: Attack) -> unit.UnitNode {
 
 fn connect(version: Int) -> nullability.Analyzer {
   let assert Ok(analyzer) =
-    nullability.connect(servers.url(version, attack_database.database))
+    nullability.connect(servers.url(version, attack_database.database()))
   analyzer
 }
 

@@ -60,7 +60,7 @@ fn why_option_test(
     // Arrange
     let assert Ok(sql) = simplifile.read(why_option_folder <> file)
     let assert Ok(analyzer) =
-      nullability.connect(servers.url(version, attack_database.database))
+      nullability.connect(servers.url(version, attack_database.database()))
 
     // Act
     let decisions =

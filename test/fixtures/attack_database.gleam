@@ -11,8 +11,11 @@ import fixtures/servers
 import gleam/list
 import gleam/result
 
-/// The name of the attack database on each server.
-pub const database = "dream_model_attack"
+/// The name of the attack database on each server, with the prefix of
+/// `servers.database_name`.
+pub fn database() -> String {
+  servers.database_name("dream_model_attack")
+}
 
 /// The schema on every version.
 pub const schema =
@@ -177,6 +180,7 @@ pub fn data_sets_for(version: Int) -> List(#(String, String)) {
 /// Drops and creates the attack database on the server of a version, and
 /// creates the schema in it.
 pub fn create(version: Int) -> Result(Nil, String) {
+  let database = database()
   let admin = servers.connect(version, servers.default_database)
   let created = {
     use _ <- result.try(wire.simple_query(

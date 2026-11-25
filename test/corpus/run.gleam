@@ -28,8 +28,11 @@ import gleam/result
 import gleam/string
 import simplifile
 
-/// The database of the corpus run on each server.
-pub const database = "corpus_check"
+/// The database of the corpus run on each server, with the prefix of
+/// `servers.database_name`.
+pub fn database() -> String {
+  servers.database_name("corpus_check")
+}
 
 /// The counts of a corpus run.
 pub type Stats {
@@ -139,6 +142,7 @@ pub fn run(version: Int) -> Result(Report, String) {
 }
 
 fn recreate_database(version: Int, create: Bool) -> Result(Nil, String) {
+  let database = database()
   let admin = servers.connect(version, servers.default_database)
   let done = {
     use _ <- result.try(wire.simple_query(
@@ -161,7 +165,7 @@ fn recreate_database(version: Int, create: Bool) -> Result(Nil, String) {
 }
 
 fn connect_with_timeout(version: Int) -> Result(wire.Connection, String) {
-  wire.parse_url(servers.url(version, database))
+  wire.parse_url(servers.url(version, database()))
   |> result.map(fn(config) {
     wire.Config(..config, options: "-c statement_timeout=3000")
   })
@@ -225,7 +229,7 @@ fn run_queries(
   connection: wire.Connection,
   corpus_case: Case,
 ) -> State {
-  case nullability.connect(servers.url(version, database)) {
+  case nullability.connect(servers.url(version, database())) {
     Error(error) ->
       add_finding(
         state,

@@ -1,5 +1,5 @@
 //// The end-to-end tests: the app in e2e/model_app, copied to
-//// build/e2e/model_app, gets its models generated against PostgreSQL, the
+//// build/e2e/<version>/model_app, gets its models generated against PostgreSQL, the
 //// modules are compared with the ones in e2e/model_app/src/app/models
 //// (with the fingerprint hash left out, because it differs between
 //// versions), and the app's test/model_app_test.gleam runs the generated
@@ -8,7 +8,10 @@
 ////
 //// The copy needs the packages of the app in build/e2e/model_app/build:
 //// `sh scripts/stand-ins.sh` puts them there until dream_postgres 2.1.0
-//// and Dream 3.0.0 are on Hex. The tests of one version run one at a time.
+//// and Dream 3.0.0 are on Hex. Each version has its own copy, so the
+//// versions can run at the same time. A copy gets the build folder of
+//// build/e2e/model_app once, and again when its packages.toml is not the
+//// same. The tests of one version run one at a time.
 
 import dream_model/command.{Outcome}
 import dream_test/matchers.{be_equal, or_fail_with, should}
@@ -24,7 +27,13 @@ import simplifile
 
 const source = "e2e/model_app"
 
-const copy = "build/e2e/model_app"
+/// The build folder with the packages of the app.
+const packages_build = "build/e2e/model_app/build"
+
+/// The copy of the app for a version.
+fn copy_of(version: Int) -> String {
+  "build/e2e/" <> int.to_string(version) <> "/model_app"
+}
 
 const url_variable = "MODEL_APP_DATABASE_URL"
 
@@ -39,7 +48,8 @@ fn run_program(
 ) -> #(Int, String)
 
 pub fn tests(version: Int) -> TestSuite {
-  let url = servers.url(version, model_database.e2e_database)
+  let copy = copy_of(version)
+  let url = servers.url(version, model_database.e2e_database())
   let read_environment_variable = fn(name) {
     case name == url_variable {
       True -> Ok(url)
@@ -50,7 +60,7 @@ pub fn tests(version: Int) -> TestSuite {
     "the end-to-end app on PostgreSQL " <> int.to_string(version),
     list.flatten([
       [
-        before_all(fn() { prepare(version) }),
+        before_all(fn() { prepare(version, copy) }),
         it("--check lists every module as missing before generation", fn() {
           // Act
           let outcome =
@@ -207,22 +217,22 @@ pub fn tests(version: Int) -> TestSuite {
 
 /// Makes a new database and a new copy of the app with no generated
 /// modules, and keeps the packages of the copy.
-fn prepare(version: Int) -> Result(Nil, String) {
+fn prepare(version: Int, copy: String) -> Result(Nil, String) {
   use schema <- result.try(read(source <> "/schema.sql"))
   use Nil <- result.try(model_database.recreate(
     version,
-    model_database.e2e_database,
+    model_database.e2e_database(),
     schema,
   ))
-  use Nil <- result.try(require_packages())
+  use Nil <- result.try(require_packages(copy))
   use Nil <- result.try(
     ["src", "test", "scripts", "gleam.toml", "manifest.toml"]
     |> list.try_each(fn(entry) {
       let _ = simplifile.delete(copy <> "/" <> entry)
-      copy_entry(entry)
+      copy_entry(copy, entry)
     }),
   )
-  use Nil <- result.try(copy_dream_model())
+  use Nil <- result.try(copy_dream_model(copy))
   list.try_each(modules, fn(module) {
     simplifile.delete(copy <> "/src/app/models/" <> module <> ".gleam")
     |> result.map_error(simplifile.describe_error)
@@ -231,7 +241,7 @@ fn prepare(version: Int) -> Result(Nil, String) {
 
 /// Copies the code under test into the packages of the app, and removes
 /// its compiled copy, so `gleam run -m dream_model` in the app runs it.
-fn copy_dream_model() -> Result(Nil, String) {
+fn copy_dream_model(copy: String) -> Result(Nil, String) {
   let package = copy <> "/build/packages/dream_model"
   let _ = simplifile.delete(package <> "/src")
   let _ = simplifile.delete(copy <> "/build/dev/erlang/dream_model")
@@ -242,17 +252,30 @@ fn copy_dream_model() -> Result(Nil, String) {
   |> result.map_error(simplifile.describe_error)
 }
 
-fn require_packages() -> Result(Nil, String) {
-  case simplifile.is_file(copy <> "/build/packages/packages.toml") {
-    Ok(True) -> Ok(Nil)
-    _ ->
+/// Checks that the app has its packages, and copies the build folder with
+/// them into the copy of a version when the copy does not have the same
+/// packages.toml.
+fn require_packages(copy: String) -> Result(Nil, String) {
+  let list_file = "/packages/packages.toml"
+  case simplifile.read(packages_build <> list_file) {
+    Ok(packages) ->
+      case simplifile.read(copy <> "/build" <> list_file) {
+        Ok(copied) if copied == packages -> Ok(Nil)
+        _ -> {
+          let _ = simplifile.delete(copy <> "/build")
+          let _ = simplifile.create_directory_all(copy)
+          simplifile.copy_directory(at: packages_build, to: copy <> "/build")
+          |> result.map_error(simplifile.describe_error)
+        }
+      }
+    Error(_) ->
       Error(
         "the end-to-end app has no packages; run `sh scripts/stand-ins.sh` first",
       )
   }
 }
 
-fn copy_entry(entry: String) -> Result(Nil, String) {
+fn copy_entry(copy: String, entry: String) -> Result(Nil, String) {
   let from = source <> "/" <> entry
   let to = copy <> "/" <> entry
   case simplifile.is_directory(from) {

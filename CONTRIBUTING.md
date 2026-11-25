@@ -19,9 +19,17 @@ When both packages are on Hex, remove `scripts/stand-ins.sh` and this section, a
 1. Start the PostgreSQL servers with `make db-up`.
 2. Run `gleam test`. `DREAM_MODEL_TEST_VERSIONS="16 18"` picks the versions. The line coverage must be 100% when the tests run on every version.
 
-The end-to-end tests copy `e2e/model_app` to `build/e2e/model_app`, generate its models on each version, compare them with the modules in `e2e/model_app/src/app/models` (without the fingerprint hash, which is different on each version), run the generated code against the database, and compare its output with `e2e/model_app/expected_output.txt`.
+The tests that are the same on every version are one group, and each version is one group. The groups run at the same time, because each version has its own server and databases. The suites of one group run one after the other. Each group writes its own report, and the coverage is measured over all groups together. With arguments after `--`, for example `gleam test -- --only ...`, the groups run one after the other in one run.
 
-When a change to the generator changes the generated code on purpose, copy the new modules from `build/e2e/model_app/src/app/models` to `e2e/model_app/src/app/models` after a run on PostgreSQL 16.
+Other environment variables of the tests:
+
+- `DREAM_MODEL_TEST_DATABASE_PREFIX=w1_` puts a prefix before the name of each database that the tests create. Two test runs with different prefixes can use the same servers at the same time.
+- `DREAM_MODEL_TEST_MODULES="attack_test rules_test"` runs only the suites of these test modules, with no coverage.
+- `DREAM_MODEL_TEST_COVERAGE=off` measures no coverage.
+
+The end-to-end tests copy `e2e/model_app` to `build/e2e/<version>/model_app`, generate its models on each version, compare them with the modules in `e2e/model_app/src/app/models` (without the fingerprint hash, which is different on each version), run the generated code against the database, and compare its output with `e2e/model_app/expected_output.txt`.
+
+When a change to the generator changes the generated code on purpose, copy the new modules from `build/e2e/16/model_app/src/app/models` to `e2e/model_app/src/app/models` after a run on PostgreSQL 16.
 
 ## Write the docs
 
