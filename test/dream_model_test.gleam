@@ -3,7 +3,9 @@
 //// each server that `DREAM_MODEL_TEST_VERSIONS` picks answers; the run
 //// stops with one message when one does not.
 
+import dream_model/postgres/node_test
 import dream_model/postgres/scram_test
+import dream_model/postgres/tree_test
 import dream_model/postgres/wire_test
 import dream_test/coverage
 import dream_test/reporters/bdd
@@ -40,8 +42,10 @@ fn run_tests(versions: List(Int)) -> Nil {
   }
   let first_version = list.first(versions) |> result.unwrap(16)
   let unit_suites = [
+    node_test.tests(),
     scram_test.tests(),
     wire_test.tests(first_version),
+    tree_test.tests(first_version),
   ]
   runner.new(unit_suites)
   |> runner.default_timeout_ms(120_000)
