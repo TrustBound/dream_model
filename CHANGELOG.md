@@ -87,14 +87,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Errors, CI and schema drift, and Command reference.
 
 ### Testing
-- The full test run on PostgreSQL 16, 17, 18 and 19: 2552 tests, 0
-  failed, 100.0% line coverage (2104 of 2104 lines). The run took 4
-  minutes 34 seconds of wall time, and the runner reports 6 minutes 38
+- The full test run on PostgreSQL 16, 17, 18 and 19: 2833 tests, 0
+  failed, 100.0% line coverage (2304 of 2304 lines). The run took 1
+  minute 28 seconds of wall time, and the runners report 9 minutes 23
   seconds of test time. Mode: one `gleam test` with the default
-  versions (16 to 19), the test groups in parallel and the end-to-end tests
-  one at a time, with the fuzz tests (seeds 101, 202 and 303) and the
-  sqlc corpus test. Machine: Apple M1 Max, 10 cores, 64 GB, macOS
-  26.5.1, OTP 29, Gleam 1.19.2.
+  versions (16 to 19): the tests that are the same on every version and
+  each version are groups that run at the same time, the suites of a
+  group one after the other and the end-to-end tests one at a time, with
+  the fuzz tests (seeds 101, 202 and 303) and the sqlc corpus test. The
+  servers keep their data in memory. Machine: Apple M1 Max, 10 cores,
+  64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 - The fuzzer makes random schemas, data and queries, analyzes each query
   and runs it on each data set: a column typed never NULL must never
   return NULL, and each `Option` parameter must accept NULL. The long
@@ -102,8 +104,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   48151 on PostgreSQL 16 (5,196 queries), seed 59273 on 17 (5,210),
   seed 61409 on 18 (5,212) and seed 73627 on 19 (5,191).
 - The mutation test switches off or widens one rule at a time in a copy
-  of the source, and requires failing tests: 36 mutants, each one
-  killed. They cover the NULL rules of columns and parameters, each
-  never-NULL construct, the length coercion, the ambiguous unique name
-  refusal and array elements as `Option`. The run took 48 minutes 32
-  seconds on the same machine.
+  of the source, and requires failing tests: 67 mutants (68 runs, one
+  mutant runs on two versions), each one killed. They cover the NULL
+  rules of columns and parameters, each never-NULL construct, the length
+  coercion, the ambiguous unique name refusal, array elements as
+  `Option`, numeric as exact text and the not null elements hint. Each
+  mutant runs its own test modules first, in 3 workers at the same time:
+  a mutant of a NULL rule takes about 16 seconds, and a mutant of the
+  generator about 2 seconds, on the same machine.

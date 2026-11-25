@@ -49,7 +49,7 @@ pub const schema_fingerprint =
   client.SchemaFingerprint(
     module: "app/models/user",
     tables: ["public.users"],
-    hash: "c647a49b7456744923f77bccaff712d442b9958e0250cb2ac35a1d668f843e65",
+    hash: "41437081a0c965016a4ec7e8d4f16e650be16bea5d22317d552c0e782c7e6988",
   )
 ```
 

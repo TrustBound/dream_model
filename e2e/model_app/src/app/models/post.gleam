@@ -15,7 +15,7 @@ pub const schema_fingerprint =
   client.SchemaFingerprint(
     module: "app/models/post",
     tables: ["public.posts", "public.users"],
-    hash: "cb7c50496c7a8bc69ff3743694efaab87c3bf22ffb932e7dcd9a5f8a65efa8de",
+    hash: "6a9c56b8996a75e06a8dabf27437c955dd98f0081814e07983caccfe530114e7",
   )
 
 /// A row of by_user.sql and create.sql.
