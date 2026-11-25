@@ -40,8 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 - The full test run on PostgreSQL 16, 17, 18 and 19: 2552 tests, 0
-  failed, 100.0% line coverage (2104 of 2104 lines). The run took 5
-  minutes 0 seconds of wall time, and the runner reports 7 minutes 11
+  failed, 100.0% line coverage (2104 of 2104 lines). The run took 4
+  minutes 34 seconds of wall time, and the runner reports 6 minutes 38
   seconds of test time. Mode: one `gleam test` with the default
   versions (16 to 19), the suites in parallel and the end-to-end suites
   one at a time, with the fuzz tests (seeds 101, 202 and 303) and the

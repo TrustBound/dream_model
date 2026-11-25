@@ -13,7 +13,7 @@ pub const schema_fingerprint =
   client.SchemaFingerprint(
     module: "app/models/sample",
     tables: ["public.samples"],
-    hash: "103d511d1b59d3b1a2ffc2d258114128560545411a3b92c7406d6db4b3a6cb96",
+    hash: "553c427ce81951468692805bbaf04332e6d4f3d53441ee3de9add7c34e469136",
   )
 
 /// A row of get.sql.

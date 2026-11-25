@@ -79,7 +79,7 @@ pub fn check_models(db: client.Connection) -> Result(Nil, String) {
 
 ## Testing
 
-- The full test run on PostgreSQL 16, 17, 18 and 19: 2552 tests, 0 failed, 100.0% line coverage (2104 of 2104 lines). The run took 5 minutes 0 seconds of wall time, and the runner reports 7 minutes 11 seconds of test time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The full test run on PostgreSQL 16, 17, 18 and 19: 2552 tests, 0 failed, 100.0% line coverage (2104 of 2104 lines). The run took 4 minutes 34 seconds of wall time, and the runner reports 6 minutes 38 seconds of test time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
 - The long fuzz runs analyzed 20,809 random queries on PostgreSQL 16 to 19 with 0 failures, and the mutation test killed each of its 36 mutants
 - The attack tests analyze each statement and then run it on several data sets: a column typed never NULL must never return NULL, and each `Option` parameter must accept NULL
 - The end-to-end tests generate the models of `e2e/model_app` on each version, compare them with the checked-in modules, run them against the database, and compare the output
