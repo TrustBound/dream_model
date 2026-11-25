@@ -1,0 +1,25 @@
+name = "dream_model"
+version = "1.0.0"
+description = "Generate typed Gleam models with Dream errors from PostgreSQL .sql files"
+licences = ["Apache-2.0"]
+gleam = ">= 1.19.2"
+repository = { type = "github", user = "TrustBound", repo = "dream_model" }
+links = [
+    { title = "Documentation", href = "https://hexdocs.pm/dream_model" },
+    { title = "GitHub", href = "https://github.com/TrustBound/dream_model" },
+]
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_erlang = ">= 1.0.0 and < 2.0.0"
+simplifile = ">= 2.3.0 and < 3.0.0"
+filepath = ">= 1.1.0 and < 2.0.0"
+tom = ">= 2.0.0 and < 3.0.0"
+
+[dev-dependencies]
+dream_test = ">= 3.0.0 and < 4.0.0"
+dream_snippets = ">= 1.0.0 and < 2.0.0"
+
+[tools.dream_snippets]
+checked_from_version = "1.0.0"
+tested_files = ["test", ".github", "scripts", "gleam.toml", "docker-compose.yml"]

@@ -1,0 +1,46 @@
+# The PostgreSQL servers for the tests, one per supported major version.
+# Start them with `make db-up` and stop them with `make db-down`. They keep
+# no data: each start gives an empty database.
+#
+# Each server uses its own port on this machine, so the tests do not use a
+# PostgreSQL server that already listens on 5432.
+
+x-postgres: &postgres
+  environment:
+    POSTGRES_USER: dream
+    POSTGRES_PASSWORD: dream
+    POSTGRES_DB: dream_test
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
+    interval: 1s
+    timeout: 5s
+    retries: 30
+
+services:
+  postgres-16:
+    <<: *postgres
+    image: postgres:16-alpine
+    ports:
+      - "5416:5432"
+  postgres-17:
+    <<: *postgres
+    image: postgres:17-alpine
+    ports:
+      - "5417:5432"
+  postgres-18:
+    <<: *postgres
+    image: postgres:18-alpine
+    ports:
+      - "5418:5432"
+  postgres-19:
+    <<: *postgres
+    image: postgres:19-alpine
+    ports:
+      - "5419:5432"
+  # PostgreSQL 15 is not supported. The tests use it only to check that
+  # dream_model refuses it with a clear message.
+  postgres-15:
+    <<: *postgres
+    image: postgres:15-alpine
+    ports:
+      - "5415:5432"
