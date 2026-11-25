@@ -4,6 +4,8 @@
 //// that `DREAM_MODEL_TEST_VERSIONS` picks; the run stops with one message
 //// when that fails.
 
+import dream_model/corpus_test
+import dream_model/fuzz_test
 import dream_model/nullability/attack_test
 import dream_model/nullability/hint_test
 import dream_model/nullability/reason_test
@@ -66,6 +68,8 @@ fn run_tests(versions: List(Int)) -> Nil {
         catalog_test.tests(version),
         rules_test.tests(version),
         attack_test.tests(version),
+        fuzz_test.tests(version),
+        corpus_test.tests(version),
       ]
     })
   runner.new(list.append(unit_suites, version_suites))

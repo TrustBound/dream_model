@@ -1,0 +1,118 @@
+name: Nightly
+
+# The long checks that are too slow for each pull request:
+#
+# - a long fuzz run with a new random seed on PostgreSQL 16 to 19; the log
+#   starts with the seed and the command that replays the run;
+# - the mutation test, which switches off each NULL rule in turn and
+#   requires the tests to fail.
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "Fuzz seed (empty for a new random seed)"
+        required: false
+        default: ""
+
+env:
+  # A read-only Hex key. With it, dependency lookups do not hit the limit for requests with no key.
+  HEXPM_READ_API_KEY: ${{ secrets.HEX_READ_API_KEY }}
+  OTP_VERSION: "28"
+  GLEAM_VERSION: "1.19.2"
+  REBAR3_VERSION: "3"
+
+jobs:
+  fuzz:
+    name: Long fuzz run
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # The same package cache as ci.yml, so gleam does not ask the Hex API
+      # to resolve versions on every run.
+      - name: Restore Gleam packages
+        id: gleam-packages
+        uses: actions/cache/restore@v4
+        with:
+          path: build/packages
+          key: gleam-packages-${{ runner.os }}-gleam${{ env.GLEAM_VERSION }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('gleam.toml', 'manifest.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            gleam-packages-${{ runner.os }}-gleam${{ env.GLEAM_VERSION }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('gleam.toml', 'manifest.toml') }}-
+            gleam-packages-${{ runner.os }}-gleam${{ env.GLEAM_VERSION }}-otp${{ env.OTP_VERSION }}-
+
+      - name: Install Erlang and Gleam
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          gleam-version: ${{ env.GLEAM_VERSION }}
+          rebar3-version: ${{ env.REBAR3_VERSION }}
+
+      - name: Download dependencies
+        run: gleam deps download
+
+      - name: Start the PostgreSQL servers
+        run: sh scripts/db-up.sh 16 17 18 19
+
+      - name: Run the long fuzz run
+        env:
+          SEED_INPUT: ${{ github.event.inputs.seed }}
+        run: |
+          set -eu
+          seed="${SEED_INPUT:-}"
+          if [ -z "$seed" ]; then
+            seed=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')
+          fi
+          echo "Fuzz seed: $seed"
+          echo "### Fuzz seed: $seed" >> "$GITHUB_STEP_SUMMARY"
+          gleam run -m fuzz -- --seed "$seed" --schemas 150 --queries 60
+
+      - name: Save Gleam packages
+        if: always() && steps.gleam-packages.outputs.cache-primary-key != ''
+        uses: actions/cache/save@v4
+        with:
+          path: build/packages
+          key: ${{ steps.gleam-packages.outputs.cache-primary-key }}
+
+  mutation:
+    name: Mutation test
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Restore Gleam packages
+        uses: actions/cache/restore@v4
+        with:
+          path: build/packages
+          key: gleam-packages-${{ runner.os }}-gleam${{ env.GLEAM_VERSION }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('gleam.toml', 'manifest.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            gleam-packages-${{ runner.os }}-gleam${{ env.GLEAM_VERSION }}-otp${{ env.OTP_VERSION }}-${{ hashFiles('gleam.toml', 'manifest.toml') }}-
+            gleam-packages-${{ runner.os }}-gleam${{ env.GLEAM_VERSION }}-otp${{ env.OTP_VERSION }}-
+
+      - name: Install Erlang and Gleam
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          gleam-version: ${{ env.GLEAM_VERSION }}
+          rebar3-version: ${{ env.REBAR3_VERSION }}
+
+      - name: Download dependencies
+        run: gleam deps download
+
+      - name: Start the PostgreSQL servers
+        # 15 too: the test run checks that it is reachable.
+        run: sh scripts/db-up.sh 15 16 17 18
+
+      - name: Fetch the sqlc corpus
+        run: sh scripts/fetch-corpus.sh
+
+      - name: Run the mutation test
+        run: sh scripts/mutation-test.sh

@@ -75,6 +75,12 @@ jobs:
         # docker-compose.yml, the same as `make db-up`.
         run: sh scripts/db-up.sh
 
+      - name: Fetch the sqlc corpus
+        # The corpus test runs sqlc's PostgreSQL end-to-end test queries. The
+        # script fetches them at a pinned commit into build/corpus; without
+        # them the test fails.
+        run: sh scripts/fetch-corpus.sh
+
       - name: Run tests
         env:
           CI: "true"
