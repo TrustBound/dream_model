@@ -103,6 +103,7 @@ generator_query="src/dream_model/generator/query.gleam"
 gleam_type="src/dream_model/generator/gleam_type.gleam"
 catalog="src/dream_model/postgres/catalog.gleam"
 hint="src/dream_model/nullability/hint.gleam"
+query_hint="src/dream_model/generator/query_hint.gleam"
 model="src/dream_model/generator/model.gleam"
 command="src/dream_model/command.gleam"
 wire="src/dream_model/postgres/wire.gleam"
@@ -616,6 +617,49 @@ mutant "array elements: nullable value function" "16" "$gleam_type" \
   'encoder_text(element)' \
   "test/dream_model/generator/gleam_type_test.gleam"
 
+
+# --- Numeric text and the not null elements hint ----------------------------
+
+mutant "numeric: numeric_as_text left off" "16" "$model" \
+  'True -> ["  |> client.numeric_as_text"]' \
+  'True -> []' \
+  "test/dream_model/generator/model_test.gleam test/dream_model/e2e_test.gleam"
+
+mutant "numeric: Float decoder" "16" "$gleam_type" \
+  'NumericType -> "client.numeric_text_decoder()"' \
+  'NumericType -> "client.numeric_decoder()"' \
+  "test/dream_model/generator/gleam_type_test.gleam"
+
+mutant "numeric: Float value function" "16" "$gleam_type" \
+  'NumericType -> "client.numeric_text"' \
+  'NumericType -> "client.float"' \
+  "test/dream_model/generator/gleam_type_test.gleam"
+
+mutant "numeric: numeric[] parameter allowed" "16" "$generator_query" \
+  'case gleam_type.has_numeric(element) {' \
+  'case False {' \
+  "test/dream_model/generator/query_test.gleam"
+
+mutant "not null elements: hint ignored" "16" "$query_hint" \
+  '"not null elements" -> Ok(add_element_names(hints, line))' \
+  '"not null elements" -> Ok(hints)' \
+  "test/dream_model/generator/query_hint_test.gleam test/dream_model/generator/query_test.gleam"
+
+mutant "not null elements: no check of each element" "16" "$model" \
+  '      "client.promised_elements_not_null("
+      <> gleam_type.decoder_text(element, column_literal)
+      <> ", "
+      <> string_literal(file)
+      <> ", "
+      <> column_literal
+      <> ")"' \
+  '"decode.list(" <> gleam_type.decoder_text(element, column_literal) <> ")"' \
+  "test/dream_model/generator/model_test.gleam test/dream_model/e2e_test.gleam"
+
+mutant "not null elements: any column type" "16" "$generator_query" \
+  'Ok(TypedColumn(gleam_type: gleam_type.ListType(_), ..)) -> Ok(Nil)' \
+  'Ok(_) -> Ok(Nil)' \
+  "test/dream_model/generator/query_test.gleam"
 
 # --- Running ----------------------------------------------------------------
 
