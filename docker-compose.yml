@@ -4,6 +4,10 @@
 #
 # Each server uses its own port on this machine, so the tests do not use a
 # PostgreSQL server that already listens on 5432.
+#
+# dream_model reads the query tree from a LOG notice, so each analyzed
+# statement writes its whole tree to the server log too. The log of each
+# container is capped, or a long test run fills the disk of Docker.
 
 x-postgres: &postgres
   environment:
@@ -15,6 +19,11 @@ x-postgres: &postgres
     interval: 1s
     timeout: 5s
     retries: 30
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "2"
 
 services:
   postgres-16:

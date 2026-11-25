@@ -4,6 +4,8 @@
 //// that `DREAM_MODEL_TEST_VERSIONS` picks; the run stops with one message
 //// when that fails.
 
+import dream_model/generator/gleam_type_test
+import dream_model/generator/name_test
 import dream_model/generator/query_hint_test
 import dream_model/nullability/attack_test
 import dream_model/nullability/hint_test
@@ -20,6 +22,7 @@ import dream_test/reporters/bdd
 import dream_test/reporters/progress
 import dream_test/runner
 import fixtures/attack_database
+import fixtures/model_database
 import fixtures/servers
 import gleam/io
 import gleam/list
@@ -33,6 +36,7 @@ pub fn main() -> Nil {
   let prepared =
     list.try_each([15, ..versions], servers.check_reachable)
     |> result.try(fn(_) { list.try_each(versions, attack_database.create) })
+    |> result.try(fn(_) { list.try_each(versions, model_database.create) })
   case prepared {
     Ok(Nil) -> run_tests(versions)
     Error(message) -> {
@@ -57,6 +61,7 @@ fn run_tests(versions: List(Int)) -> Nil {
     scram_test.tests(),
     hint_test.tests(),
     query_hint_test.tests(),
+    name_test.tests(),
     reason_test.tests(),
     wire_test.tests(first_version),
     tree_test.tests(first_version),
@@ -68,6 +73,7 @@ fn run_tests(versions: List(Int)) -> Nil {
         catalog_test.tests(version),
         rules_test.tests(version),
         attack_test.tests(version),
+        gleam_type_test.tests(version),
       ]
     })
   runner.new(list.append(unit_suites, version_suites))

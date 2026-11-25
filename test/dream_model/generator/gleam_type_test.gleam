@@ -1,0 +1,195 @@
+//// Tests for `dream_model/generator/gleam_type`, on the generator database.
+
+import dream_model/generator/gleam_type.{
+  BitArrayType, BoolType, DateType, FloatType, IntType, ListType, NumericType,
+  StringType, TimeOfDayType, TimestampType, TimestampWithTimeZoneType,
+}
+import dream_model/nullability
+import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/suite.{type TestSuite}
+import dream_test/unit.{describe, group, it}
+import fixtures/model_database
+import gleam/int
+import gleam/list
+import gleam/option.{Some}
+import gleam/string
+
+pub fn tests(version: Int) -> TestSuite {
+  describe("dream_model/generator/gleam_type", [
+    resolve_tests(version),
+    text_tests(),
+  ])
+}
+
+/// Resolves the type that a SQL type name names, as `regtype` reads it.
+fn resolve_named(
+  version: Int,
+  type_name: String,
+) -> Result(gleam_type.GleamType, String) {
+  let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+  let assert Ok([[Some(oid)]]) =
+    nullability.execute(analyzer, "select $1::text::regtype::oid::text", [
+      Some(type_name),
+    ])
+  let assert Ok(oid) = int.parse(oid)
+  let assert Ok(types) = gleam_type.load(analyzer, [oid])
+  let _ = nullability.close(analyzer)
+  gleam_type.resolve(types, oid)
+}
+
+fn resolve_tests(version: Int) {
+  let cases = [
+    #("smallint", Ok(IntType)),
+    #("integer", Ok(IntType)),
+    #("bigint", Ok(IntType)),
+    #("oid", Ok(IntType)),
+    #("real", Ok(FloatType)),
+    #("double precision", Ok(FloatType)),
+    #("numeric", Ok(NumericType)),
+    #("text", Ok(StringType)),
+    #("varchar", Ok(StringType)),
+    #("char", Ok(StringType)),
+    #("name", Ok(StringType)),
+    #("citext", Ok(StringType)),
+    #("json", Ok(StringType)),
+    #("jsonb", Ok(StringType)),
+    #("mood", Ok(StringType)),
+    #("boolean", Ok(BoolType)),
+    #("bytea", Ok(BitArrayType)),
+    #("uuid", Ok(BitArrayType)),
+    #("timestamp", Ok(TimestampType)),
+    #("timestamptz", Ok(TimestampWithTimeZoneType)),
+    #("date", Ok(DateType)),
+    #("time", Ok(TimeOfDayType)),
+    #("positive_int", Ok(IntType)),
+    #("integer[]", Ok(ListType(IntType))),
+    #("mood[]", Ok(ListType(StringType))),
+    #("text[][]", Ok(ListType(StringType))),
+    #("interval", Error("interval")),
+    #("interval[]", Error("interval[]")),
+    #("\"char\"", Error("\"char\"")),
+  ]
+  group(
+    "resolve",
+    list.map(cases, fn(example) {
+      let #(type_name, expected) = example
+      it("resolves " <> type_name <> " to " <> string.inspect(expected), fn() {
+        // Act
+        let found = resolve_named(version, type_name)
+
+        // Assert
+        found
+        |> should
+        |> be_equal(expected)
+        |> or_fail_with("Expected " <> string.inspect(expected))
+      })
+    })
+      |> list.append([
+        it("refuses a type that load did not read", fn() {
+          // Act
+          let found = gleam_type.resolve(gleam_type.empty_types(), 999_999)
+
+          // Assert
+          found
+          |> should
+          |> be_equal(Error("the type with oid 999999"))
+          |> or_fail_with("Expected the unknown oid")
+        }),
+      ]),
+  )
+}
+
+fn text_tests() {
+  let every_type = [
+    IntType,
+    FloatType,
+    NumericType,
+    StringType,
+    BoolType,
+    BitArrayType,
+    TimestampType,
+    TimestampWithTimeZoneType,
+    DateType,
+    TimeOfDayType,
+    ListType(ListType(IntType)),
+  ]
+  group("texts", [
+    it("type_text writes every type", fn() {
+      // Act
+      let texts = list.map(every_type, gleam_type.type_text)
+
+      // Assert
+      texts
+      |> should
+      |> be_equal([
+        "Int", "Float", "Float", "String", "Bool", "BitArray",
+        "client.Timestamp", "client.Timestamp", "client.Date",
+        "client.TimeOfDay", "List(List(Int))",
+      ])
+      |> or_fail_with("Expected the type of each")
+    }),
+    it("decoder_text writes every decoder", fn() {
+      // Act
+      let texts = list.map(every_type, gleam_type.decoder_text)
+
+      // Assert
+      texts
+      |> should
+      |> be_equal([
+        "decode.int", "decode.float", "client.numeric_decoder()",
+        "decode.string", "decode.bool", "decode.bit_array",
+        "client.timestamp_decoder()",
+        "client.timestamp_with_time_zone_decoder()",
+        "client.calendar_date_decoder()",
+        "client.calendar_time_of_day_decoder()",
+        "decode.list(decode.list(decode.int))",
+      ])
+      |> or_fail_with("Expected the decoder of each")
+    }),
+    it("encoder_text writes every value function", fn() {
+      // Act
+      let texts = list.map(every_type, gleam_type.encoder_text)
+
+      // Assert
+      texts
+      |> should
+      |> be_equal([
+        "client.int", "client.float", "client.float", "client.text",
+        "client.bool", "client.bytea", "client.timestamp", "client.timestamp",
+        "client.calendar_date", "client.calendar_time_of_day",
+        "client.array(client.array(client.int, _), _)",
+      ])
+      |> or_fail_with("Expected the value function of each")
+    }),
+    it("encode_call calls the value function", fn() {
+      // Act
+      let text = gleam_type.encode_call(IntType, "id", False)
+
+      // Assert
+      text
+      |> should
+      |> be_equal("client.int(id)")
+      |> or_fail_with("Expected client.int(id)")
+    }),
+    it("encode_call sends a list with client.array", fn() {
+      // Act
+      let text = gleam_type.encode_call(ListType(IntType), "ids", False)
+
+      // Assert
+      text
+      |> should
+      |> be_equal("client.array(client.int, ids)")
+      |> or_fail_with("Expected client.array(client.int, ids)")
+    }),
+    it("encode_call sends an optional list with client.nullable", fn() {
+      // Act
+      let text = gleam_type.encode_call(ListType(IntType), "ids", True)
+
+      // Assert
+      text
+      |> should
+      |> be_equal("client.nullable(client.array(client.int, _), ids)")
+      |> or_fail_with("Expected client.nullable of client.array")
+    }),
+  ])
+}

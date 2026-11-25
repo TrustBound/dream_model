@@ -24,6 +24,15 @@ pub fn tests(version: Int) -> TestSuite {
       Ok("r"),
     ),
     catalog_case(
+      "get_relation returns the quoted schema and name",
+      version,
+      fn(catalog, oids) {
+        catalog.get_relation(catalog, oid_of(oids, "users"))
+        |> result.map(fn(relation) { relation.name })
+      },
+      Ok("public.users"),
+    ),
+    catalog_case(
       "get_attribute returns a column by its number",
       version,
       fn(catalog, oids) {

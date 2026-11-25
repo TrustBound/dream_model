@@ -29,6 +29,9 @@ pub type Attribute {
 /// A relation (`pg_class` row) and the rules on it.
 pub type Relation {
   Relation(
+    /// The schema and the name, each quoted as `quote_ident` does, for
+    /// example `public.users`.
+    name: String,
     /// `relkind`: `r` table, `p` partitioned table, `v` view, `m`
     /// materialized view, `f` foreign table, and so on.
     kind: String,
@@ -147,8 +150,11 @@ const relations_sql =
   exists (select 1 from pg_catalog.pg_trigger t where t.tgrelid = c.oid
     and not t.tgisinternal and (t.tgtype & 2) = 2),
   c.relrowsecurity or exists (select 1 from pg_catalog.pg_policy p
-    where p.polrelid = c.oid and p.polwithcheck is not null)
-from pg_catalog.pg_class c where c.oid = any($1::oid[])"
+    where p.polrelid = c.oid and p.polwithcheck is not null),
+  pg_catalog.quote_ident(n.nspname) || '.' || pg_catalog.quote_ident(c.relname)
+from pg_catalog.pg_class c
+join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+where c.oid = any($1::oid[])"
 
 const attributes_sql =
   "select a.attrelid, a.attnum, a.attname, a.attnotnull, a.atttypid,
@@ -199,9 +205,10 @@ fn load_relations(
   use not_valid <- result.try(load_not_valid(catalog, connection, new))
   let relations =
     list.fold(relations, catalog.relations, fn(relations, row) {
-      let #(oid, kind, has_before_trigger, has_row_security) = row
+      let #(oid, kind, has_before_trigger, has_row_security, name) = row
       let relation =
         Relation(
+          name:,
           kind:,
           attributes: list.filter_map(attributes, fn(attribute) {
             case attribute.0 == oid {
@@ -356,12 +363,13 @@ fn decode_integer_and_text(
 
 fn decode_relation_row(
   row: List(Option(String)),
-) -> Result(#(Int, String, Bool, Bool), Nil) {
+) -> Result(#(Int, String, Bool, Bool, String), Nil) {
   use oid <- result.try(get_integer(row, 0))
   use kind <- result.try(get_text(row, 1))
   use has_before_trigger <- result.try(get_boolean(row, 2))
   use has_row_security <- result.try(get_boolean(row, 3))
-  Ok(#(oid, kind, has_before_trigger, has_row_security))
+  use name <- result.try(get_text(row, 4))
+  Ok(#(oid, kind, has_before_trigger, has_row_security, name))
 }
 
 fn decode_attribute_row(

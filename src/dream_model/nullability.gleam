@@ -211,6 +211,19 @@ pub fn analyze(
   Ok(#(Analysis(columns:, parameters:), analyzer))
 }
 
+/// Runs one statement on the catalog connection, with each parameter as
+/// text (`None` is NULL). The generator reads the catalog facts that the
+/// NULL rules do not need with it: types, unique constraints and the
+/// schema fingerprint.
+pub fn execute(
+  analyzer: Analyzer,
+  sql: String,
+  parameters: List(Option(String)),
+) -> Result(List(List(Option(String))), AnalysisError) {
+  wire.execute(analyzer.catalog_connection, sql, parameters)
+  |> result.map_error(DatabaseFailed)
+}
+
 /// Checks one row of results against the `-- not null:` hints, the same
 /// way the generated decoder does: a NULL in a hinted column is an error.
 pub fn check_row(
