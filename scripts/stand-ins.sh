@@ -40,11 +40,16 @@ dream_postgres_packages="dream_postgres_client dream_postgres_driver backoff ope
 dream_dependency_packages="dream_http_server dream_socket_server gleam_http gleam_yielder marceau gramps gleam_crypto hpack_erl logging"
 
 # copy_package <from folder> <to packages folder> <name>
+# Also removes the compiled package of the build folder: Gleam does not
+# compile a package again when only its source changed.
 copy_package() {
   rm -rf "$2/$3"
   mkdir -p "$2"
   cp -R "$1" "$2/$3"
   rm -rf "$2/$3/build"
+  for mode in dev prod lsp; do
+    rm -rf "$(dirname "$2")/$mode/erlang/$3"
+  done
 }
 
 # list_package <packages folder> <name> <version>
@@ -120,3 +125,8 @@ mkdir -p "$e2e_packages/dream_model"
 cp -R "$root/src" "$root/gleam.toml" "$e2e_packages/dream_model/"
 list_package "$e2e_packages" dream_model "$(version_of "$e2e_packages/dream_model")"
 echo "Copied dream, dream_postgres, dream_model and their packages into build/e2e/model_app/build/packages"
+
+# The tests copy build/e2e/model_app/build into a copy of the app for each
+# version (build/e2e/<version>/model_app). Remove those copies, so that the
+# next run copies the new packages.
+find "$root/build/e2e" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' -exec rm -rf {} +

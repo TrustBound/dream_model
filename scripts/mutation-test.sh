@@ -488,6 +488,12 @@ mutant "parameter: target is not a table" "16" "$rules" \
   'use Nil <- result.try(Ok(Nil))' \
   "$rule_tests"
 
+mutant "parameter: target or partition is not a table" "16" "$rules" \
+  '"r" | "p" -> Ok(Nil)
+    kind -> Error(reason.RelationNotTable(kind))' \
+  '_ -> Ok(Nil)' \
+  "$rule_tests"
+
 mutant "parameter: partition is not a table" "16" "$rules" \
   'use Nil <- result.try(check_table_kind(member))' \
   'use Nil <- result.try(Ok(Nil))' \
