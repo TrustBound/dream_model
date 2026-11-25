@@ -115,6 +115,11 @@ fn server_first_error_tests() {
         "r=rOprNGfwEbeRWgbNEkqOx,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=0",
       ),
     ),
+    error_case(
+      "an iteration count above the maximum",
+      "r=rOprNGfwEbeRWgbNEkqOx,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=1000001",
+      scram.TooManyIterations(1_000_001),
+    ),
   ])
 }
 
@@ -256,6 +261,10 @@ fn error_to_string_tests() {
     text_case(
       ServerRejected("invalid-proof"),
       "the server rejected the SCRAM proof: invalid-proof",
+    ),
+    text_case(
+      scram.TooManyIterations(5_000_000),
+      "the server asks for 5000000 SCRAM iterations, and dream_model computes at most 1000000; lower scram_iterations on the server and set the password again",
     ),
   ])
 }

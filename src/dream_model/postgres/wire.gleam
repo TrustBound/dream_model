@@ -92,6 +92,9 @@ pub type WireError {
   TlsFailed(reason: String)
   /// The server asks for a password, and the URL has none.
   PasswordMissing
+  /// The server asks for the password in cleartext, and the connection
+  /// has no TLS, so anyone on the network could read the password.
+  CleartextWithoutTls
   /// The server asks for an authentication method that this client does
   /// not support. The value is the code of the authentication request.
   UnsupportedAuthentication(method: String)
@@ -154,17 +157,26 @@ const ssl_request_code = 80_877_103
 ///
 /// The port is 5432 when the URL has none, and the database is the user
 /// name when the URL has none. `sslmode` can be `disable`, `require` or
-/// `verify-full`.
+/// `verify-full`; the query string can hold no other key.
+///
+/// The user name and the password end at the last `@` before the path, so
+/// a raw `@` in the password works. No error holds any part of them: the
+/// user name and the password are split off before the rest of the URL is
+/// read, and an `@` after the host is refused.
 pub fn parse_url(url: String) -> Result(Config, WireError) {
+  use #(user_information, without_user) <- result.try(split_user_information(
+    url,
+  ))
   use parsed <- result.try(
-    uri.parse(url) |> result.replace_error(InvalidUrl("it is not a URL")),
+    uri.parse(without_user)
+    |> result.replace_error(InvalidUrl("it is not a URL")),
   )
   use Nil <- result.try(check_scheme(parsed.scheme))
   use host <- result.try(
     option.to_result(parsed.host, InvalidUrl("it has no host"))
     |> result.try(require_text(_, "it has no host")),
   )
-  use #(user, password) <- result.try(parse_user_information(parsed.userinfo))
+  use #(user, password) <- result.try(parse_user_information(user_information))
   use database <- result.try(parse_database(parsed.path, user))
   use tls <- result.try(parse_tls_mode(parsed.query))
   Ok(Config(
@@ -262,6 +274,12 @@ pub fn close(connection: Connection) -> Result(Nil, WireError) {
   sent
 }
 
+/// Closes the connection without the goodbye message, for a connection
+/// that is no longer of use after a failure. It cannot fail.
+pub fn abort(connection: Connection) -> Nil {
+  close_socket(connection.socket)
+}
+
 /// Returns the value of one field of an ErrorResponse or NoticeResponse,
 /// for example `"C"` for the SQLSTATE code.
 pub fn get_field(
@@ -287,6 +305,8 @@ pub fn error_to_string(error: WireError) -> String {
       "the URL asks for TLS (sslmode), and the PostgreSQL server does not offer it"
     TlsFailed(reason) -> "the TLS handshake with PostgreSQL failed: " <> reason
     PasswordMissing -> "PostgreSQL asks for a password, and the URL has none"
+    CleartextWithoutTls ->
+      "PostgreSQL asks for the password in cleartext, and the connection has no TLS; add sslmode=require or sslmode=verify-full to the URL, or use SCRAM-SHA-256 on the server"
     UnsupportedAuthentication(method) ->
       "PostgreSQL asks for an authentication method that dream_model does not support: "
       <> method
@@ -324,6 +344,61 @@ fn require_text(text: String, reason: String) -> Result(String, WireError) {
   }
 }
 
+/// Takes the user name and the password out of the URL: the text between
+/// `://` and the last `@` before the first `/`, `?` or `#`. Returns them,
+/// and the URL without them.
+fn split_user_information(
+  url: String,
+) -> Result(#(Option(String), String), WireError) {
+  case string.split_once(url, "://") {
+    Error(Nil) -> Ok(#(None, url))
+    Ok(#(scheme, rest)) -> {
+      let #(authority, after_authority) =
+        split_authority(string.to_graphemes(rest), [])
+      use Nil <- result.try(case string.contains(after_authority, "@") {
+        True ->
+          Error(InvalidUrl(
+            "it has an @ after the host; write @, /, ? and # in the user name and the password as %40, %2F, %3F and %23",
+          ))
+        False -> Ok(Nil)
+      })
+      let #(user_information, host_and_port) = split_at_last_at(authority)
+      Ok(#(
+        user_information,
+        scheme <> "://" <> host_and_port <> after_authority,
+      ))
+    }
+  }
+}
+
+/// Splits the text after `://` at the first `/`, `?` or `#`: the
+/// authority (user name, password, host and port), and the rest.
+fn split_authority(
+  characters: List(String),
+  authority: List(String),
+) -> #(String, String) {
+  case characters {
+    [] -> #(string.concat(list.reverse(authority)), "")
+    ["/", ..] | ["?", ..] | ["#", ..] -> #(
+      string.concat(list.reverse(authority)),
+      string.concat(characters),
+    )
+    [character, ..rest] -> split_authority(rest, [character, ..authority])
+  }
+}
+
+/// Splits the authority at its last `@`: the user name and the password
+/// before it, the host and the port after it.
+fn split_at_last_at(authority: String) -> #(Option(String), String) {
+  case list.reverse(string.split(authority, "@")) {
+    [host_and_port, last, ..earlier] -> #(
+      Some(string.join(list.reverse([last, ..earlier]), "@")),
+      host_and_port,
+    )
+    _ -> #(None, authority)
+  }
+}
+
 fn parse_user_information(
   information: Option(String),
 ) -> Result(#(String, Option(String)), WireError) {
@@ -355,11 +430,28 @@ fn percent_decode(text: String) -> Result(String, WireError) {
   |> result.replace_error(InvalidUrl("it has a bad percent escape"))
 }
 
+/// The keys that the query string of the URL can hold.
+const query_keys = ["sslmode"]
+
 fn parse_tls_mode(query: Option(String)) -> Result(TlsMode, WireError) {
   use pairs <- result.try(
     uri.parse_query(option.unwrap(query, ""))
     |> result.replace_error(InvalidUrl("its query string cannot be read")),
   )
+  let unknown =
+    list.map(pairs, fn(pair) { pair.0 })
+    |> list.filter(fn(key) { !list.contains(query_keys, key) })
+    |> list.unique
+  use Nil <- result.try(case unknown {
+    [] -> Ok(Nil)
+    _ ->
+      Error(InvalidUrl(
+        "its query string has the keys "
+        <> string.join(unknown, ", ")
+        <> ", which dream_model does not support; the only supported key is "
+        <> string.join(query_keys, ", "),
+      ))
+  })
   case list.key_find(pairs, "sslmode") {
     Error(Nil) | Ok("disable") -> Ok(NoTls)
     Ok("require") -> Ok(TlsWithoutVerification)
@@ -428,6 +520,10 @@ fn authenticate(socket: Socket, config: Config) -> Result(Nil, WireError) {
   case kind, body {
     "R", <<0:32>> -> Ok(Nil)
     "R", <<3:32>> -> {
+      use Nil <- result.try(case config.tls {
+        NoTls -> Error(CleartextWithoutTls)
+        TlsWithoutVerification | TlsWithVerification -> Ok(Nil)
+      })
       use password <- result.try(require_password(config))
       use Nil <- result.try(send_bytes(socket, message("p", c_string(password))))
       authenticate(socket, config)
@@ -539,21 +635,31 @@ type Response {
   )
 }
 
+/// Sends the messages and reads the response up to ReadyForQuery. When
+/// sending or reading fails, for example after the timeout, or a message
+/// breaks the protocol, the rest of the response can still arrive later,
+/// so the connection is out of step: it is closed, and each later request
+/// on it fails.
 fn request(
   connection: Connection,
   messages: BitArray,
 ) -> Result(Response, WireError) {
-  use Nil <- result.try(send_bytes(connection.socket, messages))
-  use response <- result.try(collect_response(
-    connection.socket,
-    Response(
-      rows: [],
-      parameter_types: [],
-      fields: [],
-      notices: [],
-      error: None,
-    ),
-  ))
+  let exchanged = {
+    use Nil <- result.try(send_bytes(connection.socket, messages))
+    collect_response(
+      connection.socket,
+      Response(
+        rows: [],
+        parameter_types: [],
+        fields: [],
+        notices: [],
+        error: None,
+      ),
+    )
+  }
+  use response <- result.try(
+    result.map_error(exchanged, close_after_failure(connection.socket, _)),
+  )
   case response.error {
     Some(error) -> Error(error)
     None ->

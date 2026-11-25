@@ -23,7 +23,15 @@ pub type ScramError {
   ServerSignatureMismatch
   /// The server reported an error in its final message (`e=...`).
   ServerRejected(reason: String)
+  /// The server asks for more iterations than `maximum_iterations`. Each
+  /// iteration costs time on the client, so a server could make the
+  /// client hang.
+  TooManyIterations(iterations: Int)
 }
+
+/// The most PBKDF2 iterations that the client computes. PostgreSQL uses
+/// 4096 by default (`scram_iterations`).
+pub const maximum_iterations = 1_000_000
 
 /// The client-final message and the server signature that the server must
 /// send back in its final message.
@@ -148,6 +156,12 @@ pub fn error_to_string(error: ScramError) -> String {
     ServerSignatureMismatch ->
       "the server could not prove that it knows the password, so the connection stopped"
     ServerRejected(reason) -> "the server rejected the SCRAM proof: " <> reason
+    TooManyIterations(iterations) ->
+      "the server asks for "
+      <> int.to_string(iterations)
+      <> " SCRAM iterations, and dream_model computes at most "
+      <> int.to_string(maximum_iterations)
+      <> "; lower scram_iterations on the server and set the password again"
   }
 }
 
@@ -204,8 +218,9 @@ fn parse_server_first(
     |> result.try(int.parse)
     |> result.replace_error(malformed),
   )
-  case iterations > 0 {
-    True -> Ok(#(nonce, salt, iterations))
-    False -> Error(malformed)
+  case iterations > 0, iterations > maximum_iterations {
+    False, _ -> Error(malformed)
+    True, True -> Error(TooManyIterations(iterations))
+    True, False -> Ok(#(nonce, salt, iterations))
   }
 }

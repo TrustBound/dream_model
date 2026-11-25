@@ -6,10 +6,10 @@
 
 import dream_model/postgres/scram
 import dream_model/postgres/wire.{
-  Config, ConnectFailed, Description, Field, InvalidUrl, NoTls, Notice,
-  PasswordMissing, ProtocolViolation, ScramFailed, ServerError, SocketFailed,
-  TlsFailed, TlsRefused, TlsWithVerification, TlsWithoutVerification,
-  UnsupportedAuthentication,
+  CleartextWithoutTls, Config, ConnectFailed, Description, Field, InvalidUrl,
+  NoTls, Notice, PasswordMissing, ProtocolViolation, ScramFailed, ServerError,
+  SocketFailed, TlsFailed, TlsRefused, TlsWithVerification,
+  TlsWithoutVerification, UnsupportedAuthentication,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -87,6 +87,19 @@ fn parse_url_tests() {
       Config("h", 5432, "u", None, "d", TlsWithVerification, ""),
     ),
     url_case(
+      "ends the password at the last @ before the path",
+      "postgresql://app:p@ss@db.example.com:6543/app?sslmode=require",
+      Config(
+        "db.example.com",
+        6543,
+        "app",
+        Some("p@ss"),
+        "app",
+        TlsWithoutVerification,
+        "",
+      ),
+    ),
+    url_case(
       "reads sslmode=disable",
       "postgresql://u@h/d?sslmode=disable",
       Config("h", 5432, "u", None, "d", NoTls, ""),
@@ -161,6 +174,16 @@ fn parse_url_error_tests() {
       "refuses a query string that cannot be read",
       "postgresql://u@h/d?sslmode=%zz",
       "its query string cannot be read",
+    ),
+    url_error_case(
+      "refuses an @ after the host, and names no part of the password",
+      "postgresql://app:p/ss@db.example.com/app",
+      "it has an @ after the host; write @, /, ? and # in the user name and the password as %40, %2F, %3F and %23",
+    ),
+    url_error_case(
+      "refuses query keys that it does not support",
+      "postgresql://u@h/d?sslmode=require&options=-c%20search_path%3Dapp&sslrootcert=ca.pem&options=x",
+      "its query string has the keys options, sslrootcert, which dream_model does not support; the only supported key is sslmode",
     ),
     url_error_case(
       "refuses an sslmode that is not supported",
@@ -407,14 +430,24 @@ fn ready_steps() -> List(fake_server.Step) {
 fn authentication_tests() {
   group("authentication", [
     fake_case("accepts trust", after_startup(ready_steps()), Ok(Nil)),
-    fake_case(
-      "sends the cleartext password",
-      after_startup([
-        Send(fake_server.message("R", <<3:32>>)),
-        ExpectMessage(fake_server.message("p", <<"secret":utf8, 0>>)),
-        ..ready_steps()
-      ]),
+    fake_url_case(
+      "sends the cleartext password over TLS",
+      fake_server.start_with_query(
+        [
+          AcceptTls,
+          ReceiveStartup,
+          Send(fake_server.message("R", <<3:32>>)),
+          ExpectMessage(fake_server.message("p", <<"secret":utf8, 0>>)),
+          ..ready_steps()
+        ],
+        "?sslmode=require",
+      ),
       Ok(Nil),
+    ),
+    fake_case(
+      "refuses to send the cleartext password without TLS",
+      after_startup([Send(fake_server.message("R", <<3:32>>))]),
+      Error(CleartextWithoutTls),
     ),
     fake_case(
       "sends the MD5 password",
@@ -434,7 +467,7 @@ fn authentication_tests() {
       "returns PasswordMissing when the URL has no password",
       string.replace(
         fake_server.start(
-          after_startup([Send(fake_server.message("R", <<3:32>>))]),
+          after_startup([Send(fake_server.message("R", <<5:32, 1, 2, 3, 4>>))]),
         ),
         "dream:secret@",
         "dream@",
@@ -650,6 +683,31 @@ fn malformed(name: String) -> wire.WireError {
 
 fn malformed_message_tests() {
   group("malformed messages", [
+    it("closes the connection after a malformed response", fn() {
+      // Arrange
+      let steps =
+        [ReceiveStartup, ..ready_steps()]
+        |> list.append([
+          ReceiveMessage,
+          Send(fake_server.message("D", <<>>)),
+          Send(fake_server.ready()),
+          ReceiveMessage,
+          Send(fake_server.message("D", <<1:16, 1:32, "2":utf8>>)),
+          Send(fake_server.ready()),
+        ])
+      let assert Ok(connection) = connect_url(fake_server.start(steps))
+
+      // Act
+      let first = wire.simple_query(connection, "select 1")
+      let second = wire.simple_query(connection, "select 2")
+      let _ = wire.close(connection)
+
+      // Assert
+      #(first, second)
+      |> should
+      |> be_equal(#(Error(malformed("DataRow")), Error(SocketFailed("closed"))))
+      |> or_fail_with("Expected the second query to fail on a closed socket")
+    }),
     query_case(
       "refuses an empty DataRow",
       [fake_server.message("D", <<>>)],
@@ -746,6 +804,10 @@ fn error_to_string_tests() {
     text_case(
       PasswordMissing,
       "PostgreSQL asks for a password, and the URL has none",
+    ),
+    text_case(
+      CleartextWithoutTls,
+      "PostgreSQL asks for the password in cleartext, and the connection has no TLS; add sslmode=require or sslmode=verify-full to the URL, or use SCRAM-SHA-256 on the server",
     ),
     text_case(
       UnsupportedAuthentication("7"),
