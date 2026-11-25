@@ -9,9 +9,10 @@ links = [
     { title = "GitHub", href = "https://github.com/TrustBound/dream_model" },
 ]
 
-# The modules under dream_model/postgres and dream_model/nullability are the
-# engine of the generator. Their API can change in any release.
-internal_modules = ["dream_model/postgres", "dream_model/postgres/*", "dream_model/nullability", "dream_model/nullability/*"]
+# The public API of dream_model is the command `gleam run -m dream_model`.
+# Every other module is the engine of the generator. Its API can change in
+# any release.
+internal_modules = ["dream_model/postgres", "dream_model/postgres/*", "dream_model/nullability", "dream_model/nullability/*", "dream_model/generator", "dream_model/generator/*", "dream_model/command"]
 
 [erlang]
 extra_applications = ["crypto", "ssl"]
@@ -22,6 +23,7 @@ gleam_erlang = ">= 1.0.0 and < 2.0.0"
 simplifile = ">= 2.3.0 and < 3.0.0"
 filepath = ">= 1.1.0 and < 2.0.0"
 tom = ">= 2.0.0 and < 3.0.0"
+dream_postgres = ">= 2.1.0 and < 3.0.0"
 
 [dev-dependencies]
 dream_test = ">= 3.0.0 and < 4.0.0"
