@@ -134,4 +134,5 @@ jobs:
         run: sh scripts/fetch-corpus.sh
 
       - name: Run the mutation test
-        run: sh scripts/mutation-test.sh
+        # --all: every mutant runs, also one with a recorded result.
+        run: sh scripts/mutation-test.sh --all
