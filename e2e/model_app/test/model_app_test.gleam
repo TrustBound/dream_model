@@ -3,13 +3,17 @@
 //// starting with `| `. The tests of dream_model compare the lines with
 //// expected_output.txt.
 
+import app/controllers/user_controller
 import app/models/post
 import app/models/sample
 import app/models/user
+import app/startup
 import dream/http/error.{type Error}
+import dream/http/response
 import dream_postgres/client
 import gleam/int
 import gleam/io
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/string
@@ -22,22 +26,42 @@ fn get_env(name: String) -> Result(String, Nil)
 pub fn main() -> Nil {
   let assert Ok(url) = get_env("MODEL_APP_DATABASE_URL")
   let assert Ok(db) = client.from_url(url)
-  show(
-    "check_schema",
-    client.check_schema(db, [
-      user.schema_fingerprint,
-      post.schema_fingerprint,
-      sample.schema_fingerprint,
-    ]),
-  )
+  show("startup.check_models", startup.check_models(db))
   check_users(db)
+  show_response("user_controller.show", user_controller.show(db, 1))
+  show_response(
+    "user_controller.show of a missing user",
+    user_controller.show(db, 99),
+  )
   check_posts(db)
   check_samples(db)
   show_error("user.delete of a user with posts", user.delete(db, 1))
+  run(db, "alter table users add column age int")
+  show(
+    "startup.check_models after a new column",
+    startup.check_models(db) |> result.map_error(first_line),
+  )
+}
+
+/// The first line of a message. The other lines hold fingerprints, which
+/// are different on each PostgreSQL version.
+fn first_line(message: String) -> String {
+  string.split(message, "\n") |> list.first |> result.unwrap(message)
 }
 
 fn show(label: String, value: a) -> Nil {
   io.println("| " <> label <> ": " <> string.inspect(value))
+}
+
+fn show_response(label: String, found: response.Response) -> Nil {
+  io.println(
+    "| "
+    <> label
+    <> ": "
+    <> int.to_string(found.status)
+    <> " "
+    <> string.inspect(found.body),
+  )
 }
 
 fn show_error(label: String, value: Result(a, Error)) -> Nil {

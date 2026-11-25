@@ -1,0 +1,1 @@
+select label from things

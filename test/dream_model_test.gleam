@@ -5,6 +5,7 @@
 //// when that fails.
 
 import dream_model/command_test
+import dream_model/docs_test
 import dream_model/e2e_test
 import dream_model/generator/fingerprint_test
 import dream_model/generator/gleam_type_test
@@ -86,6 +87,7 @@ fn run_tests(versions: List(Int)) -> Nil {
         fingerprint_test.tests(version),
         model_test.tests(version),
         command_test.tests(version),
+        docs_test.tests(version),
       ]
     })
   // The end-to-end tests of one version share a copy of the app, so they

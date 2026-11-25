@@ -4,32 +4,41 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 2.x     | ✅ Active support  |
-| < 2.0   | ❌ Not supported   |
+| 1.x     | ✅ Active support  |
+
+## What dream_model Is
+
+dream_model is a tool for development time. You run it on a developer machine or in CI, as `gleam run -m dream_model`. Your app does not run it, and the app does not depend on it at run time. It is a dev dependency.
+
+The modules that it writes are part of your app. They import only `dream`, `dream_postgres/client` and the Gleam standard library.
+
+## What dream_model Connects To
+
+dream_model connects to one PostgreSQL database: the database in the URL of `DATABASE_URL`, or of the variable that `database_url_variable` names. It opens two connections to it, and it closes them before it exits. It connects to nothing else, and it makes no network request of its own.
+
+On the database, dream_model:
+
+- Sends each `.sql` file to PostgreSQL to parse and describe it. It never executes a statement of a `.sql` file, so it changes no row.
+- Runs read-only queries on the system catalogs, for the facts of the tables, the types, the functions, the constraints and the indexes.
+- Runs the schema fingerprint query of `dream_postgres/client`.
+
+dream_model opens its analysis connection with `debug_print_rewritten=on` and `client_min_messages=log`. PostgreSQL then sends the analyzed query tree of each statement to dream_model in a LOG notice.
+
+**The server log receives every analyzed query at LOG level.** With the default `log_min_messages`, PostgreSQL also writes each tree to its log. A tree holds the text of the statement and the names of the tables and columns. It holds no row data and no parameter value. Use a database for development or CI, not the production database. If you run dream_model against a shared server, its log grows with each run.
 
 ## What dream_model Is Responsible For
 
-dream_model is a library that provides:
-- **Connection config builders** - `new`, `host`, `port`, `database`, `user`, `password`, `pool_size`
-- **Connection URL parsing** - `parse_config` and `from_url`
-- **Query result helpers** - `query.first_row` and `query.all_rows`
-
-dream_model is **not a framework** and **not an ORM**. You write the SQL. `dream_model_client`, a fork of [Pog](https://hex.pm/packages/pog), runs it.
-
-This means dream_model's security surface is small:
-- URL parsing bugs (a URL read into the wrong host, user, database or SSL mode)
-- Leaks of the password from a connection URL (for example in an error value)
-- Config builders that set a different value than the one you gave
+- **The URL**: dream_model reads the user, the password, the host, the port, the database and `sslmode` from the URL. It supports trust, cleartext, MD5 and SCRAM-SHA-256 authentication. `sslmode=verify-full` checks the certificate chain against the system CA certificates and the host name. `sslmode=require` uses TLS with no check of the certificate.
+- **Messages**: no message of dream_model holds the password of the URL.
+- **Generated code**: each generated function sends its arguments as parameters of the statement, never as SQL text. The error texts of a generated function hold no SQL, no parameter and no value of a row.
 
 ## What You're Responsible For
 
-Your application code handles:
-- **SQL injection** - You write queries (use parameterized queries with `dream_model_client.parameter`)
-- **Credentials** - Keep connection URLs and passwords out of your logs and your repository
-- **TLS** - Choose the `sslmode` your deployment needs
-- **Authentication** - You implement it
-- **Authorization** - You control access
-- **Input validation** - Check values before you put them in a query
+- **The SQL**: you write the statements. dream_model does not change them.
+- **Credentials**: keep the database URL out of your repository and your logs.
+- **TLS**: choose the `sslmode` that your network needs.
+- **The database**: run dream_model against a database for development or CI.
+- **The app**: authentication, authorization and input validation.
 
 ## Reporting a Vulnerability
 
@@ -39,70 +48,38 @@ Email: **engineering@trustbound.ai**
 
 ### What to Include
 
-- **Type of vulnerability** (e.g., password leak in an error, wrong host from a URL)
-- **Location** in dream_model's code (file/function)
-- **Steps to reproduce** with minimal example
-- **Impact** - What can an attacker do?
-- **Proof-of-concept** if you have one
+- **Type of vulnerability** (for example, a password in a message, or generated code that puts a value in the SQL text)
+- **Location** in dream_model's code (file and function)
+- **Steps to reproduce** with a minimal example
+- **Impact**: what can an attacker do?
+- **Proof of concept** if you have one
 
-Focus on vulnerabilities in **dream_model's code**, not in your application code.
+Report vulnerabilities in **dream_model's code**, not in your application code.
 
 ### What to Expect
 
 1. **Acknowledgment** within 48 hours
 2. **Assessment** within 7 days
 3. **Fix** coordinated with you on timing
-4. **Release** with security advisory
-5. **Credit** in the advisory (if desired)
-
-## Security in dream_model
-
-### Type Safety
-
-Gleam's type system prevents many vulnerabilities:
-- ✅ No null pointer exceptions
-- ✅ No buffer overflows
-- ✅ Exhaustive pattern matching
-- ✅ Immutable data structures
-
-### What dream_model Validates
-
-`parse_config` and `from_url` check the whole connection URL and return a `UrlError` for each problem. No `UrlError` or `FromUrlError` value holds the password, so you can log an error with `string.inspect`.
-
-### What dream_model Doesn't Do
-
-dream_model provides no built-in:
-- ❌ SQL query builders (use Squirrel or raw SQL)
-- ❌ Input sanitization
-- ❌ Secret storage
-- ❌ Migrations
-
-This is intentional. dream_model provides building blocks. You compose them.
+4. **Release** with a security advisory
+5. **Credit** in the advisory, if you want it
 
 ## Known Non-Issues
 
-These are not dream_model vulnerabilities (they're your application's responsibility):
+These are not dream_model vulnerabilities:
 
-- SQL injection from unparameterized queries
-- A password in a log line that your code wrote
-- `sslmode=disable` or `sslmode=require` on a network you do not trust
-- Missing authentication or authorization checks
+- The analyzed queries in the PostgreSQL server log. This is how dream_model reads the query tree.
+- A password in a log line that your code or your CI wrote.
+- `sslmode=require` or no `sslmode` on a network that you do not trust.
 
 ## Dependencies
 
-dream_model's dependencies:
-- **dream_model_client** - PostgreSQL client, a fork of Pog (wraps `dream_model_driver`, a fork of the Erlang `pgo` library)
-- **Gleam stdlib** - Type-safe, battle-tested
-- **BEAM/OTP** - 30+ years of production use
-
-We monitor dependencies and update promptly for security issues.
+- **dream_postgres**: the client that the generated code uses, and the schema fingerprint query
+- **gleam_stdlib**, **gleam_erlang**, **simplifile**, **filepath** and **tom**
+- **The Erlang `crypto` and `ssl` applications**: SCRAM-SHA-256 and TLS
 
 ## Questions?
 
 - **Security questions**: engineering@trustbound.ai
-- **Non-security issues**: [GitHub Issues](https://github.com/TrustBound/dream_model/issues)
+- **Other issues**: [GitHub Issues](https://github.com/TrustBound/dream_model/issues)
 - **General discussion**: [GitHub Discussions](https://github.com/TrustBound/dream/discussions)
-
----
-
-**Remember:** dream_model is a library. It provides tools. You write the application. You're responsible for your application's security.

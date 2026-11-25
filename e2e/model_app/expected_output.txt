@@ -1,4 +1,4 @@
-| check_schema: Ok(Nil)
+| startup.check_models: Ok(Nil)
 | user.create: Ok(User(1, "ann@example.com", Some("Ann")))
 | user.create of a taken email: 409 Email already taken
 | user.create without a nickname: Ok(User(3, "bob@example.com", None))
@@ -17,6 +17,8 @@
 | user.created_at is a time after 2020: Ok(Gt)
 | user.delete: Ok(Nil)
 | user.find after delete: 404 User not found
+| user_controller.show: 200 Text("ann@example.com")
+| user_controller.show of a missing user: 404 Text("User not found")
 | post.create: Ok(Post(1, 1, "Hello", None, False))
 | post.publish: Ok(Some(True))
 | post.publish of a missing post: Ok(None)
@@ -34,3 +36,4 @@
 | sample.get of an infinite date: 500 sample.get: the column day holds infinity, which the Gleam type Date cannot hold
 | sample.insert of a taken label: 409 Label already taken
 | user.delete of a user with posts: 500 user.delete failed
+| startup.check_models after a new column: Error("The database schema changed after dream_model generated these modules. Regenerate them with dream_model:")

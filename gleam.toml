@@ -17,6 +17,12 @@ internal_modules = ["dream_model/postgres", "dream_model/postgres/*", "dream_mod
 [documentation]
 pages = [
     { title = "Getting started", path = "guides/getting-started.html", source = "./docs/guides/getting-started.md" },
+    { title = "Hints", path = "guides/hints.html", source = "./docs/guides/hints.md" },
+    { title = "Why is this column Option?", path = "guides/why-option.html", source = "./docs/guides/why-option.md" },
+    { title = "Types", path = "guides/types.html", source = "./docs/guides/types.md" },
+    { title = "Errors", path = "guides/errors.html", source = "./docs/guides/errors.md" },
+    { title = "CI and schema drift", path = "guides/ci-and-schema-drift.html", source = "./docs/guides/ci-and-schema-drift.md" },
+    { title = "Command reference", path = "guides/command-reference.html", source = "./docs/guides/command-reference.md" },
 ]
 
 [erlang]

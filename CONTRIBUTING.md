@@ -21,6 +21,18 @@ The end-to-end tests copy `e2e/model_app` to `build/e2e/model_app`, generate its
 
 When a change to the generator changes the generated code on purpose, copy the new modules from `build/e2e/model_app/src/app/models` to `e2e/model_app/src/app/models` after a run on PostgreSQL 16.
 
+## Write the docs
+
+Every code block in the README, the guides, the doc comments, the changelog and the release notes is a copy of a tested file. `gleam run -m dream_snippets` checks each block against its file.
+
+1. Put the code in a file that a test runs. A `gleam` or `sql` block of a guide is a file in `test/snippets`, or a file of the end-to-end app in `e2e/model_app`. A `text` block is a part of `e2e/model_app/expected_output.txt`. A `sh` block is a line of a script that a test or CI runs.
+2. Put a heading directly above the block. End the heading with the "Tested snippet" badge, which links to the file at the release tag, for example `https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/types/finite_rows.sql`. Add `#L4-L9` to the link for a part of a file.
+3. Give each fence a language.
+
+The SQL files of the guides are in `test/snippets/why_option` and `test/snippets/types`. `test/dream_model/docs_test.gleam` analyzes each one on each PostgreSQL version and compares the result with what the guide says. When you add a file, add its case to that test.
+
 ## Before a commit
 
 Run `make check`: the format check, the build, the tests, the docs build and the snippet check.
+
+A commit message has the form `fix(generator): <name>` or `docs: <name>`, a blank line, and then the sections `Why This Change Was Made`, `What Was Changed` and `Note to Future Engineer`.
