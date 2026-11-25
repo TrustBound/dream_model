@@ -1,6 +1,8 @@
 #!/bin/sh
-# Proves that the tests have teeth: for each NULL rule, it switches that
-# one rule off in a copy of the repository and requires the tests to fail.
+# Proves that the tests have teeth: for each NULL rule, and for the
+# generator rules on unique hints and array elements, it switches that one
+# rule off (or widens it) in a copy of the repository and requires the
+# tests to fail.
 #
 # The script copies the repository to a temporary folder once. For each
 # mutant it restores the original source, applies the mutant's change to
@@ -10,9 +12,12 @@
 # test counts, and exits with status 1 when a mutant survives or when a
 # mutant's text is no longer in the source.
 #
-# The tests need the PostgreSQL servers (`make db-up`) and the sqlc corpus
-# (`sh scripts/fetch-corpus.sh`). The copy uses its own attack database,
-# dream_model_attack_mutation. The temporary folder is removed on exit.
+# The tests need the PostgreSQL servers (`make db-up`), the sqlc corpus
+# (`sh scripts/fetch-corpus.sh`) and the packages of the end-to-end app
+# (`sh scripts/stand-ins.sh`). The copy uses its own attack database,
+# dream_model_attack_mutation, but the same model, end-to-end, fuzz and
+# corpus databases as the repository: do not run `gleam test` in the
+# repository at the same time. The temporary folder is removed on exit.
 #
 # Usage: sh scripts/mutation-test.sh [pattern]
 #   With a pattern, only the mutants whose name contains it run.
@@ -22,9 +27,15 @@ cd "$(dirname "$0")/.."
 root=$(pwd)
 filter="${1:-}"
 rules="src/dream_model/nullability/rules.gleam"
+generator_query="src/dream_model/generator/query.gleam"
+gleam_type="src/dream_model/generator/gleam_type.gleam"
 
 if [ ! -d build/corpus ]; then
   echo "build/corpus does not exist: run sh scripts/fetch-corpus.sh first"
+  exit 1
+fi
+if [ ! -f build/e2e/model_app/build/packages/packages.toml ]; then
+  echo "the end-to-end app has no packages: run sh scripts/stand-ins.sh first"
   exit 1
 fi
 
@@ -33,11 +44,13 @@ trap 'rm -rf "$work"' EXIT INT TERM
 
 copy="$work/repository"
 mkdir -p "$copy/build"
-for item in gleam.toml manifest.toml src test; do
+for item in gleam.toml manifest.toml src test scripts docs e2e; do
   cp -R "$item" "$copy/$item"
 done
 cp -R build/packages "$copy/build/packages"
 cp -R build/corpus "$copy/build/corpus"
+mkdir -p "$copy/build/e2e/model_app"
+cp -R build/e2e/model_app/build "$copy/build/e2e/model_app/build"
 mkdir -p "$work/original"
 cp -R src "$work/original/src"
 
@@ -157,33 +170,57 @@ mutant "grouping sets empty a column" "16 17" "$rules" \
   'when: has_grouping_sets(owner),' \
   'when: False,'
 
-mutant "D2 constant: only non-NULL constants" "16" "$rules" \
+# --- Never-NULL computed values: each construct widened, then off ----------
+
+mutant "never-NULL constant: only non-NULL ones" "16" "$rules" \
   'node.text(node.get_field(expression, "constisnull")) == "false"' \
   'True'
 
-mutant "D2 count: only count" "16" "$rules" \
+mutant "never-NULL constant: off" "16" "$rules" \
+  'node.text(node.get_field(expression, "constisnull")) == "false",
+        reason.NonNullConstant,' \
+  'False,
+        reason.NonNullConstant,'
+
+mutant "never-NULL count: only count" "16" "$rules" \
   'is_function(catalog, node.get_field(expression, "aggfnoid"), "count")' \
   'True'
 
-mutant "D2 count: only pg_catalog count" "16" "$rules" \
+mutant "never-NULL count: only pg_catalog count" "16" "$rules" \
   'function.schema == "pg_catalog" && function.name == name' \
   'function.name == name'
 
-mutant "D2 EXISTS: only EXISTS sublinks" "16" "$rules" \
+mutant "never-NULL count: off" "16" "$rules" \
+  'is_function(catalog, node.get_field(expression, "aggfnoid"), "count"),' \
+  'False,'
+
+mutant "never-NULL EXISTS: only EXISTS sublinks" "16" "$rules" \
   'node.text(node.get_field(expression, "subLinkType")) == "0"' \
   'True'
 
-mutant "D2 IS [NOT] NULL: never NULL" "16" "$rules" \
+mutant "never-NULL EXISTS: off" "16" "$rules" \
+  'node.text(node.get_field(expression, "subLinkType")) == "0",' \
+  'False,'
+
+mutant "never-NULL IS [NOT] NULL: off" "16" "$rules" \
   '"NULLTEST" -> Ok(reason.NullTest)' \
   '"NULLTEST" -> Error(Nil)'
 
-mutant "D2 IS DISTINCT FROM: built-in operator" "16" "$rules" \
+mutant "never-NULL IS DISTINCT FROM: built-in only" "16" "$rules" \
   'is_built_in(catalog, node.get_field(expression, "opfuncid"))' \
   'True'
 
-mutant "D2 coalesce: last argument not NULL" "16" "$rules" \
+mutant "never-NULL IS DISTINCT FROM: off" "16" "$rules" \
+  'is_built_in(catalog, node.get_field(expression, "opfuncid")),' \
+  'False,'
+
+mutant "never-NULL coalesce: last argument not NULL" "16" "$rules" \
   'last_argument_not_null(expression, stack, catalog)' \
   'True'
+
+mutant "never-NULL coalesce: off" "16" "$rules" \
+  'last_argument_not_null(expression, stack, catalog),' \
+  'False,'
 
 mutant "grouping-expression hazard" "16" "$rules" \
   'case is_grouping_expression(query, expression) {' \
@@ -204,6 +241,14 @@ mutant "parameter store: column NOT NULL" "16" "$rules" \
     return: Error(reason.ColumnIsNotNull),' \
   'when: False,
     return: Error(reason.ColumnIsNotNull),'
+
+mutant "parameter store: length coercion is pass-through" "16" "$rules" \
+  'is_cast && is_coercion_function && has_constant_modifiers' \
+  'False'
+
+mutant "parameter store: any function is pass-through" "16" "$rules" \
+  'is_cast && is_coercion_function && has_constant_modifiers' \
+  'node.node_name(expression) == "FUNCEXPR"'
 
 mutant "parameter store: used outside the store" "16" "$rules" \
   '_, False -> ParameterRule(False, reason.AlsoUsedOutsideStore)' \
@@ -238,6 +283,24 @@ mutant "parameter: domain NOT NULL" "16" "$rules" \
 mutant "parameter: domain CHECK" "16" "$rules" \
   'refuse_when(domain.has_check, reason.DomainCheck)' \
   'refuse_when(False, reason.DomainCheck)'
+
+# --- Generator --------------------------------------------------------------
+
+mutant "unique hint: refuse an ambiguous name" "16" "$generator_query" \
+  'case descriptions_of(rows, "other") {' \
+  'case descriptions_of(rows, "none") {'
+
+mutant "array elements: Option type" "16" "$gleam_type" \
+  'ListType(element) -> "List(Option(" <> type_text(element) <> "))"' \
+  'ListType(element) -> "List(" <> type_text(element) <> ")"'
+
+mutant "array elements: optional decoder" "16" "$gleam_type" \
+  '"decode.list(decode.optional("' \
+  '"decode.list(("'
+
+mutant "array elements: nullable value function" "16" "$gleam_type" \
+  '"client.nullable(" <> encoder_text(element) <> ", _)"' \
+  'encoder_text(element)'
 
 echo
 cat "$table"

@@ -26,7 +26,7 @@ import fuzz/random.{type Random}
 import fuzz/schema.{type DataSet, type Schema, Relation}
 import gleam/int
 import gleam/list
-import gleam/option.{None}
+import gleam/option.{type Option, Some}
 import gleam/result
 import gleam/string
 
@@ -141,7 +141,9 @@ fn run_schema(
       random,
     )
     Ok(connection) -> {
-      let generator = query.new(random, schema.tables, settings.version)
+      let generator =
+        query.new(random, schema.tables, settings.version)
+        |> query.add_schema_facts(schema.column_types, schema.conflict_targets)
       let #(generator, views) = create_views(connection, generator)
       let #(report, analyzed, generator) =
         analyze_queries(report, generator, label)
@@ -280,7 +282,7 @@ fn check_query(
       "fuzz",
       analyzed.sql,
       data_sets,
-      None,
+      Some([base_parameters(analyzed.analysis)]),
       "select 1",
     )
   let #(run_failed, problems) = case outcome {
@@ -293,6 +295,25 @@ fn check_query(
     run_failed,
     list.map(problems, fn(problem) { problem <> "\n  query: " <> analyzed.sql }),
   )
+}
+
+/// A value for each parameter that its type accepts: the checks run the
+/// query with these values, then with NULL in place of each `Option`
+/// parameter.
+fn base_parameters(analysis: nullability.Analysis) -> List(Option(String)) {
+  list.map(analysis.parameters, fn(parameter) {
+    Some(base_value(parameter.type_oid))
+  })
+}
+
+fn base_value(type_oid: Int) -> String {
+  case type_oid {
+    // timestamp
+    1114 -> "2024-01-01 10:00:00"
+    // int4[]
+    1007 -> "{1,NULL}"
+    _ -> "1"
+  }
 }
 
 fn describe_failure(

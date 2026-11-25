@@ -13,10 +13,17 @@
 ////   partition only;
 //// - on PostgreSQL 18 and newer, a NOT NULL can be `NO INHERIT` so the
 ////   child table allows NULL, and a table can have rows with NULL under a
-////   `NOT NULL ... NOT VALID` constraint.
+////   `NOT NULL ... NOT VALID` constraint;
+//// - a column can have a type with a length or a precision (`varchar(n)`,
+////   `char(n)`, `numeric(p,s)`, `timestamp(p)`), whose length coercion
+////   keeps a stored NULL as NULL, or be a `timestamp` or an `int[]`;
+//// - a column of a simple table or of a table with a child table can have
+////   a unique constraint or a unique index, which an `ON CONFLICT` can
+////   name.
 ////
 //// A data set fills the tables with rows: NULL in the columns that accept
-//// it, and rows that do not match the rows of other tables.
+//// it, arrays with NULL elements, distinct values in the unique columns,
+//// and rows that do not match the rows of other tables.
 
 import fuzz/random.{type Random}
 import gleam/int
@@ -28,6 +35,8 @@ pub type Kind {
   IntKind
   TextKind
   BoolKind
+  TimestampKind
+  IntArrayKind
 }
 
 /// A table or view that queries read: its name and its columns.
@@ -37,7 +46,7 @@ pub type Relation {
 
 /// A column of a table that a data set fills.
 pub type TargetColumn {
-  TargetColumn(name: String, kind: Kind, accepts_null: Bool)
+  TargetColumn(name: String, kind: Kind, accepts_null: Bool, unique: Bool)
 }
 
 /// A table that a data set fills. The ids of its rows start after
@@ -55,6 +64,12 @@ pub type Schema {
     statements: List(String),
     /// The tables that data sets fill.
     targets: List(Target),
+    /// The SQL type of each column, by `table.column`, for example
+    /// `#("t0.k1", "varchar(10)")`.
+    column_types: List(#(String, String)),
+    /// The conflict targets of each table other than its primary key, for
+    /// example `#("t0", "(k1)")` or `#("t0", "on constraint t0_k1_key")`.
+    conflict_targets: List(#(String, String)),
   )
 }
 
@@ -72,8 +87,32 @@ type Rule {
   DomainCheck
 }
 
+type Uniqueness {
+  NotUnique
+  UniqueConstraint
+  UniqueIndex
+}
+
 type ColumnPlan {
-  ColumnPlan(name: String, kind: Kind, rule: Rule)
+  ColumnPlan(
+    name: String,
+    kind: Kind,
+    rule: Rule,
+    /// The SQL type without the domain, for example `varchar(10)`.
+    sql_type: String,
+    uniqueness: Uniqueness,
+  )
+}
+
+/// What a table adds to the schema.
+type TableParts {
+  TableParts(
+    relation: Relation,
+    statements: List(String),
+    targets: List(Target),
+    column_types: List(#(String, String)),
+    conflict_targets: List(#(String, String)),
+  )
 }
 
 type TableShape {
@@ -86,8 +125,29 @@ type TableShape {
 const domains =
   "create domain d_not_null_int as int not null;
 create domain d_not_null_text as text not null;
+create domain d_not_null_timestamp as timestamp not null;
+create domain d_not_null_int_array as int[] not null;
 create domain d_check_int as int check (value <> 0);
-create domain d_check_text as text check (value <> '')"
+create domain d_check_text as text check (value <> '');
+create domain d_check_timestamp as timestamp
+  check (value <> '2000-01-01 00:00:00');
+create domain d_check_int_array as int[] check (value <> '{}')"
+
+/// Functions that are not strict and reject NULL: a parameter inside one
+/// of them is not stored straight, so it must stay required.
+const required_functions =
+  "create function fuzz_required_int(value int) returns int
+  language plpgsql as $$ begin if value is null then
+  raise exception 'value required'; end if; return value; end $$;
+create function fuzz_required_text(value text) returns text
+  language plpgsql as $$ begin if value is null then
+  raise exception 'value required'; end if; return value; end $$;
+create function fuzz_required_timestamp(value timestamp) returns timestamp
+  language plpgsql as $$ begin if value is null then
+  raise exception 'value required'; end if; return value; end $$;
+create function fuzz_required_int_array(value int[]) returns int[]
+  language plpgsql as $$ begin if value is null then
+  raise exception 'value required'; end if; return value; end $$"
 
 /// Returns a random schema for a PostgreSQL version.
 pub fn generate(random: Random, version: Int) -> #(Schema, Random) {
@@ -114,9 +174,17 @@ pub fn generate(random: Random, version: Int) -> #(Schema, Random) {
   let tables = list.reverse(tables)
   let schema =
     Schema(
-      tables: list.map(tables, fn(table) { table.0 }),
-      statements: [domains, ..list.flat_map(tables, fn(table) { table.1 })],
-      targets: list.flat_map(tables, fn(table) { table.2 }),
+      tables: list.map(tables, fn(table) { table.relation }),
+      statements: [
+        domains,
+        required_functions,
+        ..list.flat_map(tables, fn(table) { table.statements })
+      ],
+      targets: list.flat_map(tables, fn(table) { table.targets }),
+      column_types: list.flat_map(tables, fn(table) { table.column_types }),
+      conflict_targets: list.flat_map(tables, fn(table) {
+        table.conflict_targets
+      }),
     )
   #(schema, random)
 }
@@ -139,7 +207,7 @@ fn generate_table(
   index: Int,
   shape: TableShape,
   version: Int,
-) -> #(#(Relation, List(String), List(Target)), Random) {
+) -> #(TableParts, Random) {
   let name = "t" <> int.to_string(index)
   let #(count, random) = random.between(random, 1, 3)
   let #(plans, random) =
@@ -174,7 +242,41 @@ fn generate_table(
     "" -> []
     column -> [reject_null_trigger(name, column)]
   }
-  #(#(relation, list.append(statements, trigger), targets), random)
+  let unique_indexes =
+    list.filter(plans, fn(plan) { plan.uniqueness == UniqueIndex })
+    |> list.map(fn(plan) {
+      "create unique index "
+      <> name
+      <> "_"
+      <> plan.name
+      <> "_index on "
+      <> name
+      <> " ("
+      <> plan.name
+      <> ")"
+    })
+  let column_types =
+    list.map(plans, fn(plan) { #(name <> "." <> plan.name, column_type(plan)) })
+  let conflict_targets =
+    list.flat_map(plans, fn(plan) {
+      case plan.uniqueness {
+        NotUnique -> []
+        UniqueIndex -> [#(name, "(" <> plan.name <> ")")]
+        UniqueConstraint -> [
+          #(name, "(" <> plan.name <> ")"),
+          #(name, "on constraint " <> name <> "_" <> plan.name <> "_key"),
+        ]
+      }
+    })
+  let parts =
+    TableParts(
+      relation:,
+      statements: list.flatten([statements, unique_indexes, trigger]),
+      targets:,
+      column_types:,
+      conflict_targets:,
+    )
+  #(parts, random)
 }
 
 fn generate_column(
@@ -183,7 +285,34 @@ fn generate_column(
   shape: TableShape,
   version: Int,
 ) -> #(ColumnPlan, Random) {
-  let #(kind, random) = random.choose(random, [IntKind, TextKind], IntKind)
+  let #(kind, random) =
+    random.weighted(
+      random,
+      [
+        #(0.35, IntKind),
+        #(0.35, TextKind),
+        #(0.15, TimestampKind),
+        #(0.15, IntArrayKind),
+      ],
+      IntKind,
+    )
+  let #(sql_type, random) = random.choose(random, sql_types(kind), "int")
+  // A unique constraint of a partitioned table must hold the partition
+  // key, and the rows of a legacy table repeat their values.
+  let unique_weight = case shape == Simple || shape == WithChild {
+    True -> 0.1
+    False -> 0.0
+  }
+  let #(uniqueness, random) =
+    random.weighted(
+      random,
+      [
+        #(0.8, NotUnique),
+        #(unique_weight, UniqueConstraint),
+        #(unique_weight, UniqueIndex),
+      ],
+      NotUnique,
+    )
   let no_inherit = case shape == WithChild && version >= 18 {
     True -> 0.3
     False -> 0.0
@@ -202,7 +331,27 @@ fn generate_column(
       ],
       Plain,
     )
-  #(ColumnPlan("k" <> int.to_string(number), kind, rule), random)
+  let plan =
+    ColumnPlan(
+      name: "k" <> int.to_string(number),
+      kind:,
+      rule:,
+      sql_type:,
+      uniqueness:,
+    )
+  #(plan, random)
+}
+
+/// The SQL types of a kind: the plain type, and the types with a length
+/// or a precision, whose length coercion keeps NULL as NULL.
+fn sql_types(kind: Kind) -> List(String) {
+  case kind {
+    IntKind -> ["int", "int", "numeric(8,2)", "numeric(6,0)"]
+    TextKind -> ["text", "text", "varchar(10)", "char(4)"]
+    BoolKind -> ["boolean"]
+    TimestampKind -> ["timestamp", "timestamp(0)", "timestamp(3)"]
+    IntArrayKind -> ["int[]"]
+  }
 }
 
 /// A table without a child table can have a BEFORE trigger that rejects
@@ -226,12 +375,13 @@ fn base_columns(
   trigger_column: String,
 ) -> List(TargetColumn) {
   [
-    TargetColumn("id", IntKind, False),
+    TargetColumn("id", IntKind, False, False),
     ..list.map(plans, fn(plan) {
       TargetColumn(
         plan.name,
         plan.kind,
         accepts_null(plan.rule) && plan.name != trigger_column,
+        plan.uniqueness != NotUnique,
       )
     })
   ]
@@ -249,38 +399,67 @@ fn create_table(name: String, plans: List(ColumnPlan), tail: String) -> String {
     "" -> "id int primary key"
     _ -> "id int not null, primary key (id)"
   }
+  let definitions =
+    list.flatten([
+      [key],
+      list.map(plans, column_definition),
+      list.flat_map(plans, unique_constraint(name, _)),
+    ])
   "create table "
   <> name
   <> " ("
-  <> string.join([key, ..list.map(plans, column_definition)], ", ")
+  <> string.join(definitions, ", ")
   <> ")"
   <> tail
 }
 
-fn column_definition(plan: ColumnPlan) -> String {
-  let type_name = kind_sql(plan.kind)
+/// The type of a column as its definition writes it: a domain, or the
+/// SQL type.
+fn column_type(plan: ColumnPlan) -> String {
   case plan.rule {
-    Plain -> plan.name <> " " <> type_name
-    NotNull -> plan.name <> " " <> type_name <> " not null"
-    NotNullNoInherit -> plan.name <> " " <> type_name <> " not null no inherit"
-    CheckNotNull ->
-      plan.name
-      <> " "
-      <> type_name
-      <> " check ("
-      <> plan.name
-      <> " is not null)"
+    DomainNotNull -> "d_not_null_" <> domain_suffix(plan.kind)
+    DomainCheck -> "d_check_" <> domain_suffix(plan.kind)
+    Plain | NotNull | NotNullNoInherit | CheckNotNull | CheckValue ->
+      plan.sql_type
+  }
+}
+
+fn domain_suffix(kind: Kind) -> String {
+  case kind {
+    IntKind -> "int"
+    TextKind -> "text"
+    BoolKind -> "boolean"
+    TimestampKind -> "timestamp"
+    IntArrayKind -> "int_array"
+  }
+}
+
+fn column_definition(plan: ColumnPlan) -> String {
+  let start = plan.name <> " " <> column_type(plan)
+  let rule = case plan.rule {
+    Plain | DomainNotNull | DomainCheck -> ""
+    NotNull -> " not null"
+    NotNullNoInherit -> " not null no inherit"
+    CheckNotNull -> " check (" <> plan.name <> " is not null)"
     CheckValue ->
-      plan.name
-      <> " "
-      <> type_name
-      <> " check ("
+      " check (" <> plan.name <> " <> " <> excluded_value(plan.kind) <> ")"
+  }
+  start <> rule
+}
+
+/// The table constraint of a column with a unique constraint.
+fn unique_constraint(table: String, plan: ColumnPlan) -> List(String) {
+  case plan.uniqueness {
+    UniqueConstraint -> [
+      "constraint "
+      <> table
+      <> "_"
       <> plan.name
-      <> " <> "
-      <> excluded_value(plan.kind)
-      <> ")"
-    DomainNotNull -> plan.name <> " d_not_null_" <> type_name
-    DomainCheck -> plan.name <> " d_check_" <> type_name
+      <> "_key unique ("
+      <> plan.name
+      <> ")",
+    ]
+    NotUnique | UniqueIndex -> []
   }
 }
 
@@ -290,6 +469,8 @@ pub fn kind_sql(kind: Kind) -> String {
     IntKind -> "int"
     TextKind -> "text"
     BoolKind -> "boolean"
+    TimestampKind -> "timestamp"
+    IntArrayKind -> "int[]"
   }
 }
 
@@ -297,6 +478,8 @@ fn excluded_value(kind: Kind) -> String {
   case kind {
     IntKind -> "0"
     TextKind | BoolKind -> "''"
+    TimestampKind -> "'2000-01-01 00:00:00'"
+    IntArrayKind -> "'{}'"
   }
 }
 
@@ -420,7 +603,11 @@ fn legacy(
 ) -> #(List(String), List(Target), Random) {
   let plain = list.filter(plans, fn(plan) { plan.rule == Plain })
   let #(chosen, random) =
-    random.choose(random, plain, ColumnPlan("", IntKind, Plain))
+    random.choose(
+      random,
+      plain,
+      ColumnPlan("", IntKind, Plain, "int", NotUnique),
+    )
   let values = fn(id: Int, null_column: String) {
     let others =
       list.map(plans, fn(plan) {
@@ -458,6 +645,8 @@ fn safe_value(kind: Kind) -> String {
     IntKind -> "1"
     TextKind -> "'a'"
     BoolKind -> "true"
+    TimestampKind -> "'2024-01-01 10:00:00'"
+    IntArrayKind -> "'{1,NULL}'"
   }
 }
 
@@ -534,11 +723,34 @@ fn column_value(
     }
     TextKind -> random.choose(random, ["'a'", "'b'"], "'a'")
     BoolKind -> random.choose(random, ["true", "false"], "true")
+    TimestampKind ->
+      random.choose(
+        random,
+        ["'2024-01-01 10:00:00'", "'2024-01-02 11:30:00.123'"],
+        "'2024-01-01 10:00:00'",
+      )
+    IntArrayKind ->
+      random.choose(random, ["'{1,2}'", "'{1,NULL}'", "'{NULL}'"], "'{1,2}'")
   }
   let #(null, random) = random.chance(random, 0.4)
-  case column.name, column.accepts_null && null {
-    "id", _ -> #(int.to_string(id), random)
-    _, True -> #("null", random)
-    _, False -> #(value, random)
+  case column.name, column.accepts_null && null, column.unique {
+    "id", _, _ -> #(int.to_string(id), random)
+    _, True, _ -> #("null", random)
+    _, False, True -> #(unique_value(column.kind, id), random)
+    _, False, False -> #(value, random)
+  }
+}
+
+/// A value that no other row and no parameter of a query has: the base
+/// parameters of the checks are 1, '2024-01-01 10:00:00' and '{1,NULL}'.
+fn unique_value(kind: Kind, id: Int) -> String {
+  let number = int.to_string(id)
+  case kind {
+    IntKind -> int.to_string(id * 10 + 7)
+    TextKind -> "'u" <> number <> "'"
+    BoolKind -> "true"
+    TimestampKind ->
+      "'2024-03-01 00:00:00'::timestamp + interval '" <> number <> " days'"
+    IntArrayKind -> "'{" <> int.to_string(id + 100) <> ",NULL}'"
   }
 }

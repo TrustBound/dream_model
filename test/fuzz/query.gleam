@@ -10,15 +10,20 @@
 //// `IS [NOT] NULL` and `IS [NOT] DISTINCT FROM`. They land inside outer
 //// joins, grouping sets (also as grouping expressions), set operations and
 //// subqueries. INSERT and UPDATE also store parameters into columns, for
-//// the parameter rules.
+//// the parameter rules: bare, in an explicit cast to the column's type
+//// (a length coercion for `varchar(n)` and the like), or inside a function
+//// that rejects NULL. An `ON CONFLICT` names the primary key, a unique
+//// column or a unique constraint.
 
 import fuzz/random.{type Random}
 import fuzz/schema.{
-  type Kind, type Relation, BoolKind, IntKind, Relation, TextKind,
+  type Kind, type Relation, BoolKind, IntArrayKind, IntKind, Relation, TextKind,
+  TimestampKind,
 }
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 
 /// A column that an expression can refer to.
@@ -34,6 +39,10 @@ pub type Generator {
     views: List(Relation),
     version: Int,
     aliases: Int,
+    /// The SQL type of each column, by `table.column`.
+    column_types: List(#(String, String)),
+    /// The conflict targets of each table other than its primary key.
+    conflict_targets: List(#(String, String)),
   )
 }
 
@@ -45,7 +54,25 @@ type Columns =
 
 /// Starts a generator for the tables of a schema.
 pub fn new(random: Random, tables: List(Relation), version: Int) -> Generator {
-  Generator(random:, tables:, views: [], version:, aliases: 0)
+  Generator(
+    random:,
+    tables:,
+    views: [],
+    version:,
+    aliases: 0,
+    column_types: [],
+    conflict_targets: [],
+  )
+}
+
+/// Adds the column types and the conflict targets of a schema, for the
+/// parameter stores and `ON CONFLICT`.
+pub fn add_schema_facts(
+  generator: Generator,
+  column_types: List(#(String, String)),
+  conflict_targets: List(#(String, String)),
+) -> Generator {
+  Generator(..generator, column_types:, conflict_targets:)
 }
 
 /// Adds a view that queries can read.
@@ -110,6 +137,8 @@ fn equal_literal(kind: Kind) -> String {
     IntKind -> "1"
     TextKind -> "'a'"
     BoolKind -> "true"
+    TimestampKind -> "'2024-01-01 10:00:00'::timestamp"
+    IntArrayKind -> "'{1,NULL}'::int[]"
   }
 }
 
@@ -118,6 +147,8 @@ fn other_literal(kind: Kind) -> String {
     IntKind -> "2"
     TextKind -> "'b'"
     BoolKind -> "false"
+    TimestampKind -> "'2024-01-02 11:30:00'::timestamp"
+    IntArrayKind -> "'{1,2}'::int[]"
   }
 }
 
@@ -126,6 +157,8 @@ fn fallback_literal(kind: Kind) -> String {
     IntKind -> "0"
     TextKind -> "'z'"
     BoolKind -> "false"
+    TimestampKind -> "'2000-01-01 00:00:00'::timestamp"
+    IntArrayKind -> "'{}'::int[]"
   }
 }
 
@@ -548,6 +581,11 @@ fn function_of(column: ScopeColumn) -> #(String, Kind) {
     IntKind -> #("abs(" <> column.reference <> ")", IntKind)
     TextKind -> #("lower(" <> column.reference <> ")", TextKind)
     BoolKind -> #("not " <> column.reference, BoolKind)
+    TimestampKind -> #(
+      "date_trunc('day', " <> column.reference <> ")",
+      TimestampKind,
+    )
+    IntArrayKind -> #("cardinality(" <> column.reference <> ")", IntKind)
   }
 }
 
@@ -766,12 +804,13 @@ fn aggregate_items(
   #(#(items, columns, ""), generator)
 }
 
-/// `max` of int and text, `bool_or` of boolean: PostgreSQL has no `max`
-/// of boolean.
+/// `max` of int, text, timestamp and arrays, `bool_or` of boolean:
+/// PostgreSQL has no `max` of boolean.
 fn maximum(column: ScopeColumn) -> String {
   case column.kind {
     BoolKind -> "bool_or(" <> column.reference <> ")"
-    IntKind | TextKind -> "max(" <> column.reference <> ")"
+    IntKind | TextKind | TimestampKind | IntArrayKind ->
+      "max(" <> column.reference <> ")"
   }
 }
 
@@ -971,7 +1010,7 @@ fn insert(
   let #(#(source, assigned), generator) = case with_parameters {
     True -> {
       let #(#(values, parameters), generator) =
-        parameter_values(generator, targets)
+        parameter_values(generator, table.name, targets)
       #(
         #(
           " ("
@@ -1000,7 +1039,8 @@ fn insert(
       )
     }
   }
-  let #(conflict, generator) = on_conflict(generator, targets, assigned)
+  let #(conflict, generator) =
+    on_conflict(generator, table.name, targets, assigned)
   #(
     "insert into "
       <> table.name
@@ -1019,13 +1059,14 @@ fn insert(
 /// parameters with their kinds.
 fn parameter_values(
   generator: Generator,
+  table: String,
   targets: Columns,
 ) -> #(#(List(String), List(#(Int, Kind))), Generator) {
   let #(#(values, parameters), generator) =
     list.fold(targets, #(#([], []), generator), fn(state, target) {
       let #(#(values, parameters), generator) = state
       let #(#(value, parameters), generator) =
-        parameter_value(generator, target.1, parameters)
+        parameter_value(generator, table, target, parameters)
       #(#([value, ..values], parameters), generator)
     })
   #(#(list.reverse(values), parameters), generator)
@@ -1033,15 +1074,22 @@ fn parameter_values(
 
 type ValueKind {
   NewParameter
+  CastParameter
+  RequiredParameter
   ReusedParameter
   LiteralValue
 }
 
+/// A value stored into a column: a new parameter (bare, in an explicit
+/// cast to the column's type, or inside a function that rejects NULL), a
+/// parameter of the same kind used before, or a literal.
 fn parameter_value(
   generator: Generator,
-  kind: Kind,
+  table: String,
+  target: #(String, Kind),
   parameters: List(#(Int, Kind)),
 ) -> #(#(String, List(#(Int, Kind))), Generator) {
+  let kind = target.1
   let same =
     list.filter(parameters, fn(parameter) { parameter.1 == kind })
     |> list.map(fn(parameter) { parameter.0 })
@@ -1049,23 +1097,29 @@ fn parameter_value(
     weighted(
       generator,
       [
-        #(0.6, NewParameter),
+        #(0.4, NewParameter),
+        #(0.15, CastParameter),
+        #(0.05, RequiredParameter),
         #(weight(same != [], 0.2), ReusedParameter),
         #(0.2, LiteralValue),
       ],
       NewParameter,
     )
+  let number = list.length(parameters) + 1
+  let new_parameter = "$" <> int.to_string(number)
+  let added = list.append(parameters, [#(number, kind)])
   case value_kind {
-    NewParameter -> {
-      let number = list.length(parameters) + 1
-      #(
-        #(
-          "$" <> int.to_string(number),
-          list.append(parameters, [#(number, kind)]),
-        ),
-        generator,
-      )
+    NewParameter -> #(#(new_parameter, added), generator)
+    CastParameter -> {
+      let sql_type =
+        list.key_find(generator.column_types, table <> "." <> target.0)
+        |> result.unwrap(schema.kind_sql(kind))
+      #(#(new_parameter <> "::" <> sql_type, added), generator)
     }
+    RequiredParameter -> #(
+      #(required_function(kind) <> "(" <> new_parameter <> ")", added),
+      generator,
+    )
     ReusedParameter -> {
       let #(number, generator) = choose(generator, same, 1)
       #(#("$" <> int.to_string(number), parameters), generator)
@@ -1074,27 +1128,41 @@ fn parameter_value(
   }
 }
 
+/// The function that rejects NULL, for a kind (see `fuzz/schema`).
+fn required_function(kind: Kind) -> String {
+  case kind {
+    IntKind | BoolKind -> "fuzz_required_int"
+    TextKind -> "fuzz_required_text"
+    TimestampKind -> "fuzz_required_timestamp"
+    IntArrayKind -> "fuzz_required_int_array"
+  }
+}
+
 fn on_conflict(
   generator: Generator,
+  table: String,
   targets: Columns,
   parameters: List(#(Int, Kind)),
 ) -> #(String, Generator) {
   let first = list.first(targets)
   let #(choice, generator) = between(generator, 0, 3)
+  let unique_targets =
+    list.filter(generator.conflict_targets, fn(target) { target.0 == table })
+    |> list.map(fn(target) { target.1 })
+  let #(conflict_target, generator) =
+    choose(generator, ["(id)", "(id)", ..unique_targets], "(id)")
+  let prefix = " on conflict " <> conflict_target <> " do update set "
   case first, choice {
     Error(Nil), _ | _, 0 -> #("", generator)
     _, 1 -> #(" on conflict do nothing", generator)
     Ok(#(column, _)), 2 -> #(
-      " on conflict (id) do update set " <> column <> " = excluded." <> column,
+      prefix <> column <> " = excluded." <> column,
       generator,
     )
     Ok(#(column, kind)), _ -> {
       let #(#(value, _), generator) =
-        parameter_value(generator, kind, parameters)
-      #(
-        " on conflict (id) do update set " <> column <> " = " <> value,
-        generator,
-      )
+        parameter_value(generator, table, #(column, kind), parameters)
+      #(prefix <> column <> " = " <> value, generator)
     }
   }
 }
@@ -1131,7 +1199,7 @@ fn update(
   let #(#(set, filter), generator) = case with_parameters, targets {
     True, [_, ..] -> {
       let #(#(values, parameters), generator) =
-        parameter_values(generator, targets)
+        parameter_values(generator, table.name, targets)
       let set =
         list.map2(targets, values, fn(target, value) {
           target.0 <> " = " <> value
