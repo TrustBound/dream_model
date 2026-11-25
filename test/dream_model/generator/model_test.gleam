@@ -314,6 +314,119 @@ fn render_tests(version: Int) {
       |> be_equal(#(True, True))
       |> or_fail_with("Expected sum_decoder with the promise")
     }),
+    it("reads a numeric column as exact text", fn() {
+      // Arrange
+      let unit =
+        make_unit(version, "app/models/price", [
+          #(
+            "amount.sql",
+            "-- returns: one\nselect amount from prices where id = $1",
+          ),
+        ])
+
+      // Act
+      let text =
+        model.render(unit, "abc") |> result.map(function_text(_, "amount"))
+
+      // Assert
+      text
+      |> should
+      |> be_equal(Ok(
+        "pub fn amount(db: client.Connection, id: Int) -> Result(String, Error) {\n  \"select amount from prices where id = $1\"\n  |> client.query\n  |> client.parameter(client.int(id))\n  |> client.numeric_as_text\n  |> client.returning(decode.at([0], client.numeric_text_decoder()))\n  |> client.execute(db)\n  |> one_row(\"price.amount\", \"Price not found\", [])\n}",
+      ))
+      |> or_fail_with("Expected the amount function")
+    }),
+    it("sends a numeric parameter as text", fn() {
+      // Arrange
+      let unit =
+        make_unit(version, "app/models/price", [
+          #(
+            "cheaper.sql",
+            "-- returns: none\nupdate prices set cost = $2 where amount < $1",
+          ),
+        ])
+
+      // Act
+      let text =
+        model.render(unit, "abc") |> result.map(function_text(_, "cheaper"))
+
+      // Assert
+      text
+      |> should
+      |> be_equal(Ok(
+        "pub fn cheaper(db: client.Connection, amount: String, cost: Option(String)) -> Result(Nil, Error) {\n  \"update prices set cost = $2 where amount < $1\"\n  |> client.query\n  |> client.parameter(client.numeric_text(amount))\n  |> client.parameter(client.nullable(client.numeric_text, cost))\n  |> client.execute(db)\n  |> no_rows(\"price.cheaper\", [])\n}",
+      ))
+      |> or_fail_with("Expected the cheaper function")
+    }),
+    it("checks the promised elements of an array column", fn() {
+      // Arrange
+      let unit =
+        make_unit(version, "app/models/price", [
+          #(
+            "tags.sql",
+            "-- returns: one\n-- not null elements: labels\nselect labels from prices where id = $1",
+          ),
+        ])
+
+      // Act
+      let text =
+        model.render(unit, "abc") |> result.map(function_text(_, "tags"))
+
+      // Assert
+      text
+      |> should
+      |> be_equal(Ok(
+        "pub fn tags(db: client.Connection, id: Int) -> Result(Option(List(String)), Error) {\n  \"select labels from prices where id = $1\"\n  |> client.query\n  |> client.parameter(client.int(id))\n  |> client.returning(decode.at([0], decode.optional(client.promised_elements_not_null(decode.string, \"src/app/models/price/tags.sql\", \"labels\"))))\n  |> client.execute(db)\n  |> one_row(\"price.tags\", \"Price not found\", [])\n}",
+      ))
+      |> or_fail_with("Expected the tags function")
+    }),
+    it("checks the promised elements in a record decoder", fn() {
+      // Arrange
+      let unit =
+        make_unit(version, "app/models/price", [
+          #(
+            "find.sql",
+            "-- returns: one\n-- not null elements: tags\nselect id, tags, history from prices where id = $1",
+          ),
+        ])
+
+      // Act
+      let text =
+        model.render(unit, "abc")
+        |> result.map(function_text(_, "price_decoder"))
+
+      // Assert
+      text
+      |> should
+      |> be_equal(Ok(
+        "fn price_decoder() -> decode.Decoder(Price) {\n  use id <- decode.field(0, decode.int)\n  use tags <- decode.field(1, client.promised_elements_not_null(decode.string, \"src/app/models/price/find.sql\", \"tags\"))\n  use history <- decode.field(2, decode.optional(decode.list(decode.optional(client.numeric_text_decoder()))))\n  decode.success(Price(id:, tags:, history:))\n}",
+      ))
+      |> or_fail_with("Expected the price decoder")
+    }),
+    it("reads a numeric array of a record as exact text", fn() {
+      // Arrange
+      let unit =
+        make_unit(version, "app/models/price", [
+          #(
+            "find.sql",
+            "-- returns: one\n-- not null elements: tags\nselect id, tags, history from prices where id = $1",
+          ),
+        ])
+
+      // Act
+      let text =
+        model.render(unit, "abc")
+        |> result.map(string.contains(
+          _,
+          "  |> client.numeric_as_text\n  |> client.returning(price_decoder())",
+        ))
+
+      // Assert
+      text
+      |> should
+      |> be_equal(Ok(True))
+      |> or_fail_with("Expected numeric_as_text before the returning")
+    }),
     it("imports no decoder for a module with no result columns", fn() {
       // Arrange
       let unit =
@@ -557,3 +670,20 @@ fn unique_message(
   }
 }
 "
+
+/// The text of the function `name` of a module, from its `fn` line to its
+/// closing brace.
+fn function_text(module: String, name: String) -> String {
+  let start = case string.split_once(module, "pub fn " <> name <> "(") {
+    Ok(#(_, rest)) -> "pub fn " <> name <> "(" <> rest
+    Error(Nil) ->
+      case string.split_once(module, "fn " <> name <> "(") {
+        Ok(#(_, rest)) -> "fn " <> name <> "(" <> rest
+        Error(Nil) -> ""
+      }
+  }
+  case string.split_once(start, "\n}") {
+    Ok(#(body, _)) -> body <> "\n}"
+    Error(Nil) -> start
+  }
+}

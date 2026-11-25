@@ -705,8 +705,18 @@ fn decoder_body(record: Record, fields: List(Field), file: String) -> String {
 }
 
 fn field_decoder(field: Field, file: String) -> String {
-  let decoder =
-    gleam_type.decoder_text(field.gleam_type, string_literal(field.column))
+  let column_literal = string_literal(field.column)
+  let decoder = case field.elements_promised, field.gleam_type {
+    True, gleam_type.ListType(element) ->
+      "client.promised_elements_not_null("
+      <> gleam_type.decoder_text(element, column_literal)
+      <> ", "
+      <> string_literal(file)
+      <> ", "
+      <> column_literal
+      <> ")"
+    _, other -> gleam_type.decoder_text(other, column_literal)
+  }
   case field.optional, field.promised {
     True, _ -> "decode.optional(" <> decoder <> ")"
     False, True ->
@@ -747,6 +757,14 @@ fn render_function(
       )
       <> ")"
     })
+  let numeric = case
+    list.any(output_fields(found), fn(field) {
+      gleam_type.has_numeric(field.gleam_type)
+    })
+  {
+    True -> ["  |> client.numeric_as_text"]
+    False -> []
+  }
   let returning = case found.output {
     NoOutput -> []
     ValueOutput(field) -> [
@@ -775,6 +793,7 @@ fn render_function(
         "  |> client.query",
       ],
       parameters,
+      numeric,
       returning,
       ["  |> client.execute(db)", "  |> " <> helper_call(unit, found), "}"],
     ])
@@ -790,7 +809,11 @@ fn argument_type_text(argument: Argument) -> String {
 }
 
 fn field_type_text(field: Field) -> String {
-  optional_text(gleam_type.type_text(field.gleam_type), field.optional)
+  let text = case field.elements_promised, field.gleam_type {
+    True, gleam_type.ListType(element) -> gleam_type.promised_list_text(element)
+    _, other -> gleam_type.type_text(other)
+  }
+  optional_text(text, field.optional)
 }
 
 fn optional_text(text: String, optional: Bool) -> String {

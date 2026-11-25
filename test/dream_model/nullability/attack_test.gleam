@@ -1811,6 +1811,24 @@ fn review_attacks() -> List(Attack) {
       parameter_sets: Some([[Some("300"), Some("n")]]),
       outcome: Sound,
     ),
+    // PostgreSQL does not enforce NOT NULL or CHECK on a foreign table, so
+    // the reason is the relation kind, not the column facts.
+    Attack(
+      name: "param into a foreign table with NOT NULL and CHECK",
+      minimum_version: 16,
+      sql: "insert into remote_checked (id, note) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [
+          column("id", False, Table, reason.RelationKindWithoutNotNull("f")),
+        ],
+        parameters: [
+          parameter(1, False, reason.RelationNotTable("f")),
+          parameter(2, False, reason.RelationNotTable("f")),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
     Attack(
       name: "param into a table with a foreign partition",
       minimum_version: 16,

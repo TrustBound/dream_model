@@ -45,6 +45,15 @@ create index badges_code_index on archive.badges (code);
 create table teams (id int constraint teams_id_key unique);
 create table members (team_id int constraint teams_id_key references teams (id));
 create domain team_code as text constraint teams_id_key check (value <> '');
+create domain money_amount as numeric(12, 2);
+create table prices (
+  id int primary key,
+  amount numeric(10, 2) not null,
+  cost money_amount,
+  history numeric[],
+  tags text[] not null,
+  labels text[]
+);
 "
 
 /// Drops and creates both databases on the server of a version.

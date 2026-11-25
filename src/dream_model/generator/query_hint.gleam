@@ -10,6 +10,10 @@
 //// - `-- not found: User not found` is the text of the 404 error of `one`.
 //// - `-- unique users_email_key: Email already taken` maps a violation of
 ////   that unique constraint to a 409 error with that text.
+//// - `-- not null elements: tags, scores` promises that the elements of
+////   these array result columns are never NULL. Each one is a `List(T)`,
+////   not a `List(Option(T))`, and the generated code checks the promise
+////   on each row.
 ////
 //// The NULL hints (`not null`, `nullable`, `params`) are read by
 //// `dream_model/nullability/hint`; this module only keeps their line
@@ -75,6 +79,8 @@ pub type QueryHints {
     /// Each name of the `-- not null:` and `-- nullable:` lines, with its
     /// line.
     column_names: List(NamedLine),
+    /// Each name of the `-- not null elements:` lines, with its line.
+    element_names: List(NamedLine),
   )
 }
 
@@ -100,6 +106,7 @@ pub fn parse(sql: String) -> Result(QueryHints, List(HintError)) {
       unique: [],
       parameters_line: None,
       column_names: [],
+      element_names: [],
     )
   let #(hints, errors) = list.fold(lines, #(empty, []), add_line)
   let errors =
@@ -163,6 +170,7 @@ fn add_line(
     "not found" -> add_not_found(hints, line)
     "params" -> Ok(QueryHints(..hints, parameters_line: Some(line.number)))
     "not null" | "nullable" -> Ok(add_column_names(hints, line))
+    "not null elements" -> Ok(add_element_names(hints, line))
     "unique" ->
       Error(
         "the 'unique' hint names no constraint; write 'unique <constraint>: <message>'",
@@ -177,12 +185,24 @@ fn add_line(
 }
 
 fn add_column_names(hints: QueryHints, line: Line) -> QueryHints {
-  let names =
-    string.split(line.value, ",")
-    |> list.map(string.trim)
-    |> list.filter(fn(name) { name != "" })
-    |> list.map(NamedLine(_, line.number))
-  QueryHints(..hints, column_names: list.append(hints.column_names, names))
+  QueryHints(
+    ..hints,
+    column_names: list.append(hints.column_names, named_lines(line)),
+  )
+}
+
+fn add_element_names(hints: QueryHints, line: Line) -> QueryHints {
+  QueryHints(
+    ..hints,
+    element_names: list.append(hints.element_names, named_lines(line)),
+  )
+}
+
+fn named_lines(line: Line) -> List(NamedLine) {
+  string.split(line.value, ",")
+  |> list.map(string.trim)
+  |> list.filter(fn(name) { name != "" })
+  |> list.map(NamedLine(_, line.number))
 }
 
 fn add_returns(hints: QueryHints, line: Line) -> Result(QueryHints, String) {

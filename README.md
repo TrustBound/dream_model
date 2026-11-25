@@ -124,7 +124,7 @@ pub fn show(db: client.Connection, id: Int) -> Response {
 - [Getting started](https://github.com/TrustBound/dream_model/blob/main/docs/guides/getting-started.md): write the `.sql` files of a model, generate its module, call it from a controller and check the schema at start-up
 - [Hints](https://github.com/TrustBound/dream_model/blob/main/docs/guides/hints.md): every hint, with a real example and the code that it gives
 - [Why is this column Option?](https://github.com/TrustBound/dream_model/blob/main/docs/guides/why-option.md): each reason the generator gives, with an example query and what to do
-- [Types](https://github.com/TrustBound/dream_model/blob/main/docs/guides/types.md): the Gleam type of each PostgreSQL type, arrays, infinity and the types that need a cast
+- [Types](https://github.com/TrustBound/dream_model/blob/main/docs/guides/types.md): the Gleam type of each PostgreSQL type, exact numbers, arrays, infinity and the types that need a cast
 - [Errors](https://github.com/TrustBound/dream_model/blob/main/docs/guides/errors.md): the Dream error and the exact text of each failure
 - [CI and schema drift](https://github.com/TrustBound/dream_model/blob/main/docs/guides/ci-and-schema-drift.md): `--check` in CI and `client.check_schema` at start-up
 - [Command reference](https://github.com/TrustBound/dream_model/blob/main/docs/guides/command-reference.md): every option, setting, exit status and message

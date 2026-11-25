@@ -47,11 +47,27 @@ A result column is `Option` unless a rule proves that it is never NULL: a NOT NU
 
 ### Hints
 
-`returns`, `not found`, `unique`, `not null`, `nullable` and `params`, in the comment block at the top of a file. A type name or a parameter name that the generated module uses itself is refused with the file and the line. A `unique` hint is refused at generation time when another index or constraint of the database has the same name, because PostgreSQL names a violation only by its constraint name.
+`returns`, `not found`, `unique`, `not null`, `not null elements`, `nullable` and `params`, in the comment block at the top of a file. A type name or a parameter name that the generated module uses itself is refused with the file and the line. A `unique` hint is refused at generation time when another index or constraint of the database has the same name, because PostgreSQL names a violation only by its constraint name.
 
-### Arrays and infinity
+### Exact numbers, arrays and infinity
 
-An array is `List(Option(T))`, because PostgreSQL never forbids a NULL element. A `timestamp`, `timestamptz` or `date` value of `infinity` gives a 500 with a message that names the function, the column and the Gleam type:
+A `numeric` is a `String`: the exact text of the number, so `1.50` stays `"1.50"`, and `NaN`, `Infinity` and `-Infinity` come through. A `numeric` parameter is sent as text, and PostgreSQL parses it. A `numeric[]` parameter is refused at generation time: write `$1::text[]::numeric[]` in the SQL.
+
+#### An exact round trip <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L37"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+| sample.echo_amount of 1.50: Ok(#("1.50", True))
+```
+
+An array is `List(Option(T))`, because PostgreSQL never forbids a NULL element. The `-- not null elements: tags` hint gives `List(T)`, and the generated code checks each row:
+
+#### A NULL element breaks the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L47"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+| sample.tags with a NULL element: 500 the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL
+```
+
+A `timestamp`, `timestamptz` or `date` value of `infinity` gives a 500 with a message that names the function, the column and the Gleam type:
 
 #### The message of an infinite timestamp <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L34"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 

@@ -28,12 +28,25 @@
 | post.total: Ok(1)
 | post.total of a user with no posts: 500 the SQL file src/app/models/post/total.sql promised the column total is never NULL, and PostgreSQL returned NULL
 | sample.insert: Ok(1)
-| sample.get: Ok(Sample(1, Some(7), Some(9000000000), Some(42), Some(1.5), Some(2.25), Some(12.5), Some("first"), Some("abc"), Some("short"), Some("Mixed"), Some("{\"a\": 1}"), Some("{\"b\": [1, 2]}"), Some("happy"), Some(True), Some("\u{0001}\u{0002}\u{0003}"), Some("\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0001}"), Some(Timestamp(1709212455, 0)), Some(Timestamp(1709212455, 0)), Some(Date(2024, February, 29)), Some(TimeOfDay(13, 14, 15, 0)), Some([Some("a"), None]), Some([Some(1), Some(2)]), Some(5)))
+| sample.get: Ok(Sample(1, Some(7), Some(9000000000), Some(42), Some(1.5), Some(2.25), Some("12.50"), Some("first"), Some("abc"), Some("short"), Some("Mixed"), Some("{\"a\": 1}"), Some("{\"b\": [1, 2]}"), Some("happy"), Some(True), Some("\u{0001}\u{0002}\u{0003}"), Some("\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0001}"), Some(Timestamp(1709212455, 0)), Some(Timestamp(1709212455, 0)), Some(Date(2024, February, 29)), Some(TimeOfDay(13, 14, 15, 0)), Some([Some("a"), None]), Some([Some(1), Some(2)]), Some(5)))
 | timestamp round trip: Ok(True)
 | array with a NULL element round trip: Ok(True)
 | sample.get of an infinite timestamp: 500 sample.get: the column happened_at holds infinity, which the Gleam type Timestamp cannot hold
 | sample.get of an infinite timestamptz: 500 sample.get: the column happened_at_zone holds -infinity, which the Gleam type Timestamp cannot hold
 | sample.get of an infinite date: 500 sample.get: the column day holds infinity, which the Gleam type Date cannot hold
+| sample.echo_amount of 1.50: Ok(#("1.50", True))
+| sample.echo_amount of 123456789012345678901234567890.123456789012345678901234567890: Ok(#("123456789012345678901234567890.123456789012345678901234567890", True))
+| sample.echo_amount of 0.000000000000000000000000000000000000000000000000001: Ok(#("0.000000000000000000000000000000000000000000000000001", True))
+| sample.echo_amount of -42.10: Ok(#("-42.10", True))
+| sample.echo_amount of NaN: Ok(#("NaN", True))
+| sample.echo_amount of Infinity: Ok(#("Infinity", True))
+| sample.echo_amount of -Infinity: Ok(#("-Infinity", True))
+| sample.echo_amount of text that is not a number: 500 sample.echo_amount failed
+| sample.amounts of a text array: Ok(Some([Some("1.50"), None, Some("-0.001")]))
+| sample.get of a large amount: Ok(Some("99999999999999999999.99"))
+| sample.tags with a NULL element: 500 the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL
+| sample.tags with no NULL element: Ok(Some(["a", "b"]))
+| sample.tags of a NULL array: Ok(None)
 | sample.insert of a taken label: 409 Label already taken
 | user.delete of a user with posts: 500 user.delete failed
 | startup.check_models after a new column: Error("The database schema changed after dream_model generated these modules. Regenerate them with dream_model:")

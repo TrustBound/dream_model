@@ -1,6 +1,8 @@
 //// Tests for `dream_model/generator/query`, on the generator database.
 
-import dream_model/generator/gleam_type.{IntType, StringType}
+import dream_model/generator/gleam_type.{
+  IntType, ListType, NumericType, StringType,
+}
 import dream_model/generator/query.{
   type Problem, type Query, Argument, Field, Model, NoOutput, Problem, Query,
   RecordOutput, Unique, ValueOutput,
@@ -26,6 +28,8 @@ pub fn tests(version: Int) -> TestSuite {
     success_tests(version),
     refusal_tests(version),
     parameter_tests(version),
+    numeric_tests(version),
+    element_hint_tests(version),
     text_tests(),
   ])
 }
@@ -60,9 +64,9 @@ fn problem(file: String, line: Int, message: String) -> Problem {
 }
 
 const user_fields = [
-  Field("id", "id", IntType, False, False),
-  Field("email", "email", StringType, False, False),
-  Field("nickname", "nickname", StringType, True, False),
+  Field("id", "id", IntType, False, False, False),
+  Field("email", "email", StringType, False, False, False),
+  Field("nickname", "nickname", StringType, True, False, False),
 ]
 
 fn success_tests(version: Int) {
@@ -137,7 +141,7 @@ fn success_tests(version: Int) {
       |> result.map(fn(described) { described.output })
       |> should
       |> be_equal(
-        Ok(ValueOutput(Field("total", "total", IntType, False, False))),
+        Ok(ValueOutput(Field("total", "total", IntType, False, False, False))),
       )
       |> or_fail_with("Expected the total column")
     }),
@@ -155,7 +159,7 @@ fn success_tests(version: Int) {
       |> result.map(fn(described) { described.output })
       |> should
       |> be_equal(
-        Ok(ValueOutput(Field("total", "total", IntType, False, True))),
+        Ok(ValueOutput(Field("total", "total", IntType, False, True, False))),
       )
       |> or_fail_with("Expected the promised total column")
     }),
@@ -647,6 +651,260 @@ fn parameter_tests(version: Int) {
       }),
     ),
   )
+}
+
+fn output_of(version: Int, file: String, sql: String) {
+  analyze(version, file, sql)
+  |> result.map(fn(described) { described.output })
+}
+
+fn arguments_of(version: Int, file: String, sql: String) {
+  analyze(version, file, sql)
+  |> result.map(fn(described) { described.arguments })
+}
+
+fn numeric_tests(version: Int) {
+  group("numeric", [
+    it("types a numeric column as an exact String", fn() {
+      // Act
+      let found =
+        output_of(
+          version,
+          "amount.sql",
+          "-- returns: one\nselect amount from prices where id = $1",
+        )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(
+        Ok(
+          ValueOutput(Field(
+            "amount",
+            "amount",
+            NumericType,
+            False,
+            False,
+            False,
+          )),
+        ),
+      )
+      |> or_fail_with("Expected a numeric amount field")
+    }),
+    it("types a domain over numeric as numeric", fn() {
+      // Act
+      let found =
+        output_of(
+          version,
+          "cost.sql",
+          "-- returns: one\nselect cost from prices where id = $1",
+        )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(
+        Ok(ValueOutput(Field("cost", "cost", NumericType, True, False, False))),
+      )
+      |> or_fail_with("Expected a numeric cost field")
+    }),
+    it("types a numeric parameter as numeric", fn() {
+      // Act
+      let found =
+        arguments_of(
+          version,
+          "cheaper.sql",
+          "select id from prices where amount < $1",
+        )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(Ok([Argument("amount", NumericType, False)]))
+      |> or_fail_with("Expected a numeric amount argument")
+    }),
+    it("refuses a numeric[] parameter at its line", fn() {
+      // Act
+      let found =
+        problems(
+          version,
+          "history.sql",
+          "-- returns: none\nupdate prices\nset history = $1\nwhere id = $2",
+        )
+
+      // Assert
+      found
+      |> should
+      |> be_equal([
+        problem(
+          "history.sql",
+          3,
+          "the parameter $1 is an array of numeric, which dream_model cannot send exactly; take a text array and cast it in the SQL, for example $1::text[]::numeric[], and the parameter is a List(Option(String))",
+        ),
+      ])
+      |> or_fail_with("Expected the refusal of the numeric[] parameter")
+    }),
+    it("takes a text[] parameter that the SQL casts to numeric[]", fn() {
+      // Act
+      let found =
+        arguments_of(
+          version,
+          "history.sql",
+          "-- returns: none\n-- params: history, id\nupdate prices set history = $1::text[]::numeric[] where id = $2",
+        )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(
+        Ok([
+          Argument("history", ListType(StringType), False),
+          Argument("id", IntType, False),
+        ]),
+      )
+      |> or_fail_with("Expected a text list argument and the id")
+    }),
+  ])
+}
+
+fn element_hint_tests(version: Int) {
+  let refusals = [
+    #(
+      "refuses a column that is not an array",
+      "-- not null elements: amount\nselect id, amount from prices",
+      [
+        problem(
+          "find.sql",
+          1,
+          "hint 'not null elements: amount' names a column that is not an array: its Gleam type is String; the hint is only for array columns",
+        ),
+      ],
+    ),
+    #(
+      "refuses an unknown column",
+      "-- returns: many\n-- not null elements: nothing\nselect id, tags from prices",
+      [
+        problem(
+          "find.sql",
+          2,
+          "hint 'not null elements: nothing' names an unknown column; the result columns are id, tags",
+        ),
+      ],
+    ),
+    #(
+      "refuses a table column that is not in the result",
+      "-- not null elements: labels\nselect id, tags from prices",
+      [
+        problem(
+          "find.sql",
+          1,
+          "hint 'not null elements: labels' names public.prices.labels, which is not in the result of the statement; return it, or remove it from the hint (the result columns are id, tags)",
+        ),
+      ],
+    ),
+    #(
+      "refuses a name when the statement returns no columns",
+      "-- not null elements: tags\ndelete from prices where id = $1",
+      [
+        problem(
+          "find.sql",
+          1,
+          "hint 'not null elements: tags' names public.prices.tags, which is not in the result of the statement; return it, or remove it from the hint (the statement returns no columns)",
+        ),
+      ],
+    ),
+  ]
+  group("not null elements", [
+    it("promises the elements of a NOT NULL array column", fn() {
+      // Act
+      let found =
+        output_of(
+          version,
+          "tags.sql",
+          "-- returns: one\n-- not null elements: tags\nselect tags from prices where id = $1",
+        )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(
+        Ok(
+          ValueOutput(Field(
+            "tags",
+            "tags",
+            ListType(StringType),
+            False,
+            False,
+            True,
+          )),
+        ),
+      )
+      |> or_fail_with("Expected promised elements of a NOT NULL column")
+    }),
+    it("keeps a nullable array column optional", fn() {
+      // Act
+      let found =
+        output_of(
+          version,
+          "labels.sql",
+          "-- returns: one\n-- not null elements: labels\nselect labels from prices where id = $1",
+        )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(
+        Ok(
+          ValueOutput(Field(
+            "labels",
+            "labels",
+            ListType(StringType),
+            True,
+            False,
+            True,
+          )),
+        ),
+      )
+      |> or_fail_with("Expected promised elements of an optional column")
+    }),
+    it("leaves the other array columns alone", fn() {
+      // Act
+      let found =
+        output_of(
+          version,
+          "both.sql",
+          "-- returns: one Price\n-- not null elements: tags\nselect tags, labels from prices where id = $1",
+        )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(
+        Ok(RecordOutput(
+          LocalType("Price"),
+          [
+            Field("tags", "tags", ListType(StringType), False, False, True),
+            Field("labels", "labels", ListType(StringType), True, False, False),
+          ],
+          1,
+        )),
+      )
+      |> or_fail_with("Expected only tags with promised elements")
+    }),
+    ..list.map(refusals, fn(example) {
+      let #(title, sql, expected) = example
+      it(title, fn() {
+        // Act
+        let found = problems(version, "find.sql", sql)
+
+        // Assert
+        found
+        |> should
+        |> be_equal(expected)
+        |> or_fail_with("Expected " <> string.inspect(expected))
+      })
+    })
+  ])
 }
 
 fn text_tests() {

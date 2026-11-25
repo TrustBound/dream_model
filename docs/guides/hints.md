@@ -9,6 +9,7 @@ A `.sql` file can start with comment lines that tell dream_model what the genera
 - [not found](#not-found)
 - [unique](#unique)
 - [not null](#not-null)
+- [not null elements](#not-null-elements)
 - [nullable](#nullable)
 - [params](#params)
 - [Names that the module uses](#names-that-the-module-uses)
@@ -30,6 +31,7 @@ A hint is a comment line at the top of the file, before the statement: `-- key: 
 | `-- not found: User not found` | The text of the 404 of `returns: one` |
 | `-- unique users_email_key: Email already taken` | A violation of that unique constraint gives `Conflict` (409) with the text |
 | `-- not null: total` | A computed column is not `Option`. The decoder checks each row |
+| `-- not null elements: tags` | The elements of an array column are not `Option`: `List(String)`. The decoder checks each row |
 | `-- nullable: title` | The column is `Option` |
 | `-- params: pattern, nickname?` | The names of the parameters, in order. `?` makes a parameter `Option` |
 
@@ -365,6 +367,52 @@ A NULL breaks the promise. The function then gives `InternalServerError` (500) w
 
 dream_model refuses `not null` on a table column, because the schema decides it, and on a computed column that is never NULL by rule, for example `count(*)`.
 
+## not null elements
+
+PostgreSQL never forbids a NULL element in an array, so each element of an array column is an `Option`. `not null elements: <column>, <column>` promises that the elements of these array result columns are never NULL. Each one is then a `List(T)`, and the decoder checks every element on each row. The hint is about the elements only. An array column that can be NULL stays `Option`, so here `tags` is an `Option(List(String))`. The hint works on a table column and on a computed column.
+
+### tags.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample/tags.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+-- returns: one
+-- not null elements: tags
+select tags from samples where id = $1
+```
+
+### The function of tags.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L175-L193"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+/// Generated from tags.sql.
+pub fn tags(
+  db: client.Connection,
+  id: Int,
+) -> Result(Option(List(String)), Error) {
+  "select tags from samples where id = $1"
+  |> client.query
+  |> client.parameter(client.int(id))
+  |> client.returning(decode.at(
+    [0],
+    decode.optional(client.promised_elements_not_null(
+      decode.string,
+      "src/app/models/sample/tags.sql",
+      "tags",
+    )),
+  ))
+  |> client.execute(db)
+  |> one_row("sample.tags", "Sample not found", [])
+}
+```
+
+A NULL element breaks the promise. The function then gives `InternalServerError` (500) with the text `the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL`.
+
+dream_model refuses the hint, with the file and the line, when a name is not an array result column:
+
+| The name | The message |
+| --- | --- |
+| A result column that is not an array | `hint 'not null elements: amount' names a column that is not an array: its Gleam type is String; the hint is only for array columns` |
+| A column of a table that the statement reads, but does not return | `hint 'not null elements: labels' names public.prices.labels, which is not in the result of the statement; return it, or remove it from the hint (the result columns are id, tags)` |
+| No column | `hint 'not null elements: nothing' names an unknown column; the result columns are id, tags` |
+
 ## nullable
 
 `nullable: <column>` makes a result column `Option`, also when the schema says that it is never NULL.
@@ -460,10 +508,12 @@ dream_model refuses it on line 2: `the parameter name 'many_rows' is a name that
 - **A name that the generated module uses.** See [Names that the module uses](#names-that-the-module-uses).
 - **A `unique` hint on a SELECT.** A SELECT writes no table, so no unique constraint can fail.
 - **`not null` on a table column.** The schema decides a table column. Add a NOT NULL constraint to the column.
+- **`not null` on an array to get `List(String)`.** `not null` is about the array, not its elements. Use `not null elements`.
 - **`params` with too few names.** `params` names every parameter, in order.
 
 ## Where to go next
 
 - [Why is this column Option?](why-option.md): what the generator decides without hints
 - [Errors](errors.md): the errors of the hints at run time
+- [Types](types.md#arrays): arrays and their elements
 - [Command reference](command-reference.md): every message of a refused hint

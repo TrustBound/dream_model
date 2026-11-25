@@ -62,6 +62,8 @@ fn resolve_tests(version: Int) {
     #("date", Ok(DateType)),
     #("time", Ok(TimeOfDayType)),
     #("positive_int", Ok(IntType)),
+    #("money_amount", Ok(NumericType)),
+    #("numeric[]", Ok(ListType(NumericType))),
     #("integer[]", Ok(ListType(IntType))),
     #("mood[]", Ok(ListType(StringType))),
     #("text[][]", Ok(ListType(StringType))),
@@ -122,7 +124,7 @@ fn text_tests() {
       texts
       |> should
       |> be_equal([
-        "Int", "Float", "Float", "String", "Bool", "BitArray",
+        "Int", "Float", "String", "String", "Bool", "BitArray",
         "client.Timestamp", "client.Timestamp", "client.Date",
         "client.TimeOfDay", "List(Option(List(Option(Int))))",
       ])
@@ -136,7 +138,7 @@ fn text_tests() {
       texts
       |> should
       |> be_equal([
-        "decode.int", "decode.float", "client.numeric_decoder()",
+        "decode.int", "decode.float", "client.numeric_text_decoder()",
         "decode.string", "decode.bool", "decode.bit_array",
         "client.finite_timestamp(client.timestamp_decoder(), \"day\")",
         "client.finite_timestamp(client.timestamp_with_time_zone_decoder(), \"day\")",
@@ -154,7 +156,7 @@ fn text_tests() {
       texts
       |> should
       |> be_equal([
-        "client.int", "client.float", "client.float", "client.text",
+        "client.int", "client.float", "client.numeric_text", "client.text",
         "client.bool", "client.bytea", "client.timestamp", "client.timestamp",
         "client.calendar_date", "client.calendar_time_of_day",
         "client.array(client.nullable(client.array(client.nullable(client.int, _), _), _), _)",
@@ -192,6 +194,57 @@ fn text_tests() {
         "client.nullable(client.array(client.nullable(client.int, _), _), ids)",
       )
       |> or_fail_with("Expected client.nullable of client.array")
+    }),
+    it("encode_call sends a numeric as text", fn() {
+      // Act
+      let text = gleam_type.encode_call(NumericType, "amount", False)
+
+      // Assert
+      text
+      |> should
+      |> be_equal("client.numeric_text(amount)")
+      |> or_fail_with("Expected client.numeric_text(amount)")
+    }),
+    it("encode_call sends an optional numeric with client.nullable", fn() {
+      // Act
+      let text = gleam_type.encode_call(NumericType, "amount", True)
+
+      // Assert
+      text
+      |> should
+      |> be_equal("client.nullable(client.numeric_text, amount)")
+      |> or_fail_with("Expected client.nullable of client.numeric_text")
+    }),
+    it("promised_list_text writes a list without Option elements", fn() {
+      // Act
+      let text = gleam_type.promised_list_text(NumericType)
+
+      // Assert
+      text
+      |> should
+      |> be_equal("List(String)")
+      |> or_fail_with("Expected List(String)")
+    }),
+    it("has_numeric finds a numeric in each type", fn() {
+      // Act
+      let found =
+        list.map(
+          [
+            NumericType,
+            ListType(NumericType),
+            ListType(ListType(NumericType)),
+            FloatType,
+            ListType(IntType),
+            StringType,
+          ],
+          gleam_type.has_numeric,
+        )
+
+      // Assert
+      found
+      |> should
+      |> be_equal([True, True, True, False, False, False])
+      |> or_fail_with("Expected True only for numeric and its arrays")
     }),
   ])
 }
