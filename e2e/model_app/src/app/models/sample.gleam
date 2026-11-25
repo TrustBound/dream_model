@@ -40,8 +40,8 @@ pub type Sample {
     happened_at_zone: Option(client.Timestamp),
     day: Option(client.Date),
     clock: Option(client.TimeOfDay),
-    tags: Option(List(String)),
-    scores: Option(List(Int)),
+    tags: Option(List(Option(String))),
+    scores: Option(List(Option(Int))),
     rating: Option(Int),
   )
 }
@@ -69,8 +69,8 @@ pub fn insert(
   real_number: Option(Float),
   double_number: Option(Float),
   amount: Option(Float),
-  label: String,
-  code: String,
+  label: Option(String),
+  code: Option(String),
   short_name: Option(String),
   nickname: Option(String),
   document: Option(String),
@@ -83,8 +83,8 @@ pub fn insert(
   happened_at_zone: Option(client.Timestamp),
   day: Option(client.Date),
   clock: Option(client.TimeOfDay),
-  tags: Option(List(String)),
-  scores: Option(List(Int)),
+  tags: Option(List(Option(String))),
+  scores: Option(List(Option(Int))),
   rating: Int,
 ) -> Result(Int, Error) {
   "insert into samples (
@@ -103,8 +103,8 @@ returning id"
   |> client.parameter(client.nullable(client.float, real_number))
   |> client.parameter(client.nullable(client.float, double_number))
   |> client.parameter(client.nullable(client.float, amount))
-  |> client.parameter(client.text(label))
-  |> client.parameter(client.text(code))
+  |> client.parameter(client.nullable(client.text, label))
+  |> client.parameter(client.nullable(client.text, code))
   |> client.parameter(client.nullable(client.text, short_name))
   |> client.parameter(client.nullable(client.text, nickname))
   |> client.parameter(client.nullable(client.text, document))
@@ -117,8 +117,14 @@ returning id"
   |> client.parameter(client.nullable(client.timestamp, happened_at_zone))
   |> client.parameter(client.nullable(client.calendar_date, day))
   |> client.parameter(client.nullable(client.calendar_time_of_day, clock))
-  |> client.parameter(client.nullable(client.array(client.text, _), tags))
-  |> client.parameter(client.nullable(client.array(client.int, _), scores))
+  |> client.parameter(client.nullable(
+    client.array(client.nullable(client.text, _), _),
+    tags,
+  ))
+  |> client.parameter(client.nullable(
+    client.array(client.nullable(client.int, _), _),
+    scores,
+  ))
   |> client.parameter(client.int(rating))
   |> client.returning(decode.at([0], decode.int))
   |> client.execute(db)
@@ -147,19 +153,34 @@ fn sample_decoder() -> decode.Decoder(Sample) {
   use identifier <- decode.field(16, decode.optional(decode.bit_array))
   use happened_at <- decode.field(
     17,
-    decode.optional(client.timestamp_decoder()),
+    decode.optional(client.finite_timestamp(
+      client.timestamp_decoder(),
+      "happened_at",
+    )),
   )
   use happened_at_zone <- decode.field(
     18,
-    decode.optional(client.timestamp_with_time_zone_decoder()),
+    decode.optional(client.finite_timestamp(
+      client.timestamp_with_time_zone_decoder(),
+      "happened_at_zone",
+    )),
   )
-  use day <- decode.field(19, decode.optional(client.calendar_date_decoder()))
+  use day <- decode.field(
+    19,
+    decode.optional(client.finite_date(client.calendar_date_decoder(), "day")),
+  )
   use clock <- decode.field(
     20,
     decode.optional(client.calendar_time_of_day_decoder()),
   )
-  use tags <- decode.field(21, decode.optional(decode.list(decode.string)))
-  use scores <- decode.field(22, decode.optional(decode.list(decode.int)))
+  use tags <- decode.field(
+    21,
+    decode.optional(decode.list(decode.optional(decode.string))),
+  )
+  use scores <- decode.field(
+    22,
+    decode.optional(decode.list(decode.optional(decode.int))),
+  )
   use rating <- decode.field(23, decode.optional(decode.int))
   decode.success(Sample(
     id:,
@@ -223,10 +244,15 @@ fn query_error_to_error(
   unique: List(#(String, String)),
 ) -> Error {
   let conflict = unique_message(client.violated_constraint(query_error), unique)
-  case conflict, client.broken_promise(query_error) {
-    Ok(message), _ -> error.Conflict(message)
-    Error(Nil), Ok(message) -> error.InternalServerError(message)
-    Error(Nil), Error(Nil) -> error.InternalServerError(query_name <> " failed")
+  let promise = client.broken_promise(query_error)
+  let infinite = client.infinite_value(query_error)
+  case conflict, promise, infinite {
+    Ok(message), _, _ -> error.Conflict(message)
+    Error(Nil), Ok(message), _ -> error.InternalServerError(message)
+    Error(Nil), Error(Nil), Ok(message) ->
+      error.InternalServerError(query_name <> ": " <> message)
+    Error(Nil), Error(Nil), Error(Nil) ->
+      error.InternalServerError(query_name <> " failed")
   }
 }
 

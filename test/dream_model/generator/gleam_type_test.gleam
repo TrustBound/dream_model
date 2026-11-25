@@ -124,13 +124,13 @@ fn text_tests() {
       |> be_equal([
         "Int", "Float", "Float", "String", "Bool", "BitArray",
         "client.Timestamp", "client.Timestamp", "client.Date",
-        "client.TimeOfDay", "List(List(Int))",
+        "client.TimeOfDay", "List(Option(List(Option(Int))))",
       ])
       |> or_fail_with("Expected the type of each")
     }),
     it("decoder_text writes every decoder", fn() {
       // Act
-      let texts = list.map(every_type, gleam_type.decoder_text)
+      let texts = list.map(every_type, gleam_type.decoder_text(_, "\"day\""))
 
       // Assert
       texts
@@ -138,11 +138,11 @@ fn text_tests() {
       |> be_equal([
         "decode.int", "decode.float", "client.numeric_decoder()",
         "decode.string", "decode.bool", "decode.bit_array",
-        "client.timestamp_decoder()",
-        "client.timestamp_with_time_zone_decoder()",
-        "client.calendar_date_decoder()",
+        "client.finite_timestamp(client.timestamp_decoder(), \"day\")",
+        "client.finite_timestamp(client.timestamp_with_time_zone_decoder(), \"day\")",
+        "client.finite_date(client.calendar_date_decoder(), \"day\")",
         "client.calendar_time_of_day_decoder()",
-        "decode.list(decode.list(decode.int))",
+        "decode.list(decode.optional(decode.list(decode.optional(decode.int))))",
       ])
       |> or_fail_with("Expected the decoder of each")
     }),
@@ -157,7 +157,7 @@ fn text_tests() {
         "client.int", "client.float", "client.float", "client.text",
         "client.bool", "client.bytea", "client.timestamp", "client.timestamp",
         "client.calendar_date", "client.calendar_time_of_day",
-        "client.array(client.array(client.int, _), _)",
+        "client.array(client.nullable(client.array(client.nullable(client.int, _), _), _), _)",
       ])
       |> or_fail_with("Expected the value function of each")
     }),
@@ -178,8 +178,8 @@ fn text_tests() {
       // Assert
       text
       |> should
-      |> be_equal("client.array(client.int, ids)")
-      |> or_fail_with("Expected client.array(client.int, ids)")
+      |> be_equal("client.array(client.nullable(client.int, _), ids)")
+      |> or_fail_with("Expected client.array of client.nullable elements")
     }),
     it("encode_call sends an optional list with client.nullable", fn() {
       // Act
@@ -188,7 +188,9 @@ fn text_tests() {
       // Assert
       text
       |> should
-      |> be_equal("client.nullable(client.array(client.int, _), ids)")
+      |> be_equal(
+        "client.nullable(client.array(client.nullable(client.int, _), _), ids)",
+      )
       |> or_fail_with("Expected client.nullable of client.array")
     }),
   ])

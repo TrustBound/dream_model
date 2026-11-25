@@ -411,6 +411,42 @@ fn refusal_tests(version: Int) {
         ),
       ],
     ),
+    #(
+      "refuses a unique hint whose name a check constraint of another table has",
+      "create.sql",
+      "-- unique accounts_handle_key: Handle taken\ninsert into accounts (id, handle) values ($1, $2)",
+      [
+        problem(
+          "create.sql",
+          1,
+          "the name 'accounts_handle_key' belongs to the unique index public.accounts_handle_key on public.accounts, and also to the check constraint accounts_handle_key on public.audits; PostgreSQL names a violation only by the name of its constraint, so a violation of the other object would give this Conflict; rename one of them",
+        ),
+      ],
+    ),
+    #(
+      "refuses a unique hint whose name an index of another schema has",
+      "create.sql",
+      "-- unique badges_code_index: Code taken\ninsert into badges (id, code) values ($1, $2)",
+      [
+        problem(
+          "create.sql",
+          1,
+          "the name 'badges_code_index' belongs to the unique index public.badges_code_index on public.badges, and also to the index archive.badges_code_index on archive.badges; PostgreSQL names a violation only by the name of its constraint, so a violation of the other object would give this Conflict; rename one of them",
+        ),
+      ],
+    ),
+    #(
+      "refuses a unique hint whose name a foreign key and a domain constraint have",
+      "create.sql",
+      "-- unique teams_id_key: Team taken\ninsert into teams (id) values ($1)",
+      [
+        problem(
+          "create.sql",
+          1,
+          "the name 'teams_id_key' belongs to the unique index public.teams_id_key on public.teams, and also to the check constraint teams_id_key on the domain public.team_code and the foreign key teams_id_key on public.members; PostgreSQL names a violation only by the name of its constraint, so a violation of the other object would give this Conflict; rename one of them",
+        ),
+      ],
+    ),
   ]
   group(
     "analyze refusals",

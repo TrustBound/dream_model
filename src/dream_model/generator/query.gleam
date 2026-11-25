@@ -122,6 +122,75 @@ select c.relname from family f
 join pg_catalog.pg_class c on c.oid = f.oid
 order by c.relname"
 
+/// The objects that have the name of a unique hint: `hinted` rows describe
+/// the unique indexes of the written tables with that name, `other` rows
+/// every other index or constraint with that name in any schema. A
+/// constraint that a hinted index (or an index of a partition or child
+/// table of it) backs is not an other object.
+const same_name_sql =
+  "with recursive named as (
+  select i.indexrelid as oid
+  from pg_catalog.pg_index i
+  join pg_catalog.pg_class c on c.oid = i.indexrelid
+  where i.indisunique and c.relname = $2
+    and i.indrelid = any($1::pg_catalog.text[]::pg_catalog.regclass[])
+), family(oid) as (
+  select oid from named
+  union
+  select h.inhrelid from pg_catalog.pg_inherits h
+  join family f on h.inhparent = f.oid
+), indexes as (
+  select c.oid, c.relname,
+    'the unique index ' || pg_catalog.quote_ident(n.nspname) || '.'
+      || pg_catalog.quote_ident(c.relname) || ' on '
+      || pg_catalog.quote_ident(tn.nspname) || '.'
+      || pg_catalog.quote_ident(t.relname) as description
+  from pg_catalog.pg_index i
+  join pg_catalog.pg_class c on c.oid = i.indexrelid
+  join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+  join pg_catalog.pg_class t on t.oid = i.indrelid
+  join pg_catalog.pg_namespace tn on tn.oid = t.relnamespace
+  where c.relname = $2
+)
+select 'hinted', description from indexes
+where oid in (select oid from named)
+union all
+select 'other', pg_catalog.replace(description, 'the unique index', 'the index')
+from indexes
+where oid not in (select oid from family)
+  and not exists (
+    select from pg_catalog.pg_constraint k
+    where k.conindid = indexes.oid and k.conname = indexes.relname
+      and k.contype in ('p', 'u', 'x')
+  )
+union all
+select 'other',
+  case k.contype
+    when 'c' then 'the check constraint '
+    when 'f' then 'the foreign key '
+    when 'p' then 'the primary key '
+    when 'u' then 'the unique constraint '
+    when 'x' then 'the exclusion constraint '
+    when 'n' then 'the not-null constraint '
+    when 't' then 'the constraint trigger '
+    else 'the constraint '
+  end
+  || pg_catalog.quote_ident(k.conname) || ' on '
+  || case when k.conrelid <> 0
+    then pg_catalog.quote_ident(tn.nspname) || '.'
+      || pg_catalog.quote_ident(t.relname)
+    else 'the domain ' || pg_catalog.quote_ident(yn.nspname) || '.'
+      || pg_catalog.quote_ident(y.typname)
+  end
+from pg_catalog.pg_constraint k
+left join pg_catalog.pg_class t on t.oid = k.conrelid
+left join pg_catalog.pg_namespace tn on tn.oid = t.relnamespace
+left join pg_catalog.pg_type y on y.oid = k.contypid
+left join pg_catalog.pg_namespace yn on yn.oid = y.typnamespace
+where k.conname = $2
+  and not (k.contype in ('p', 'u') and k.conindid in (select oid from family))
+order by 1, 2"
+
 /// Returns the text of a problem: `file:line: message`.
 pub fn problem_to_string(problem: Problem) -> String {
   problem.file <> ":" <> int.to_string(problem.line) <> ": " <> problem.message
@@ -528,8 +597,57 @@ fn resolve_unique_hint(
         <> "' is not a unique constraint, a primary key or a unique index of "
         <> string.join(written, ", "),
       ))
-    names -> Ok(list.map(names, Unique(_, hint.message)))
+    names -> {
+      use Nil <- result.map(refuse_same_name(analyzer, written, hint, problem))
+      list.map(names, Unique(_, hint.message))
+    }
   }
+}
+
+/// Refuses a unique hint whose name another index or constraint of the
+/// database also has. A violation names only its constraint, so the other
+/// object would give the `Conflict` of the hint.
+fn refuse_same_name(
+  analyzer: Analyzer,
+  written: List(String),
+  hint: query_hint.UniqueHint,
+  problem: fn(String) -> Problem,
+) -> Result(Nil, Problem) {
+  use rows <- result.try(
+    nullability.execute(analyzer, same_name_sql, [
+      Some(fingerprint.text_array_literal(written)),
+      Some(hint.constraint),
+    ])
+    |> result.map_error(nullability.error_to_string)
+    |> result.map_error(problem),
+  )
+  let hinted = descriptions_of(rows, "hinted")
+  case descriptions_of(rows, "other") {
+    [] -> Ok(Nil)
+    others ->
+      Error(problem(
+        "the name '"
+        <> hint.constraint
+        <> "' belongs to "
+        <> string.join(hinted, " and ")
+        <> ", and also to "
+        <> string.join(others, " and ")
+        <> "; PostgreSQL names a violation only by the name of its constraint, so a violation of the other object would give this Conflict; rename one of them",
+      ))
+  }
+}
+
+fn descriptions_of(
+  rows: List(List(Option(String))),
+  role: String,
+) -> List(String) {
+  list.filter_map(rows, fn(row) {
+    case row {
+      [Some(found_role), Some(description)] if found_role == role ->
+        Ok(description)
+      _ -> Error(Nil)
+    }
+  })
 }
 
 fn refuse_when_nothing_written(

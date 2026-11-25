@@ -12,9 +12,15 @@
 //// | `timestamp`, `timestamptz` | `client.Timestamp` (`timestamptz` is read with `client.timestamp_with_time_zone_decoder()`) |
 //// | `date` | `client.Date` |
 //// | `time` | `client.TimeOfDay` |
-//// | an array of a supported type | `List(T)` |
+//// | an array of a supported type | `List(Option(T))` |
 ////
 //// A domain has the type of its base type. Every other type is refused.
+////
+//// PostgreSQL never forbids a NULL element in an array, so each element of
+//// a `List` is an `Option`. A `timestamp`, `timestamptz` or `date` value
+//// can be `infinity` or `-infinity`, which a `Timestamp` or a `Date`
+//// cannot hold: the decoder fails such a value with a message that names
+//// the column.
 
 import dream_model/nullability.{type AnalysisError, type Analyzer}
 import gleam/dict.{type Dict}
@@ -157,12 +163,15 @@ pub fn type_text(gleam_type: GleamType) -> String {
     TimestampType | TimestampWithTimeZoneType -> "client.Timestamp"
     DateType -> "client.Date"
     TimeOfDayType -> "client.TimeOfDay"
-    ListType(element) -> "List(" <> type_text(element) <> ")"
+    ListType(element) -> "List(Option(" <> type_text(element) <> "))"
   }
 }
 
-/// Returns the decoder of the type, for example `decode.int`.
-pub fn decoder_text(gleam_type: GleamType) -> String {
+/// Returns the decoder of the type for a column, for example
+/// `decode.int`. A decoder of a time or a date fails an infinite value
+/// with a message that names the column, which `column_literal` gives as
+/// a Gleam string literal.
+pub fn decoder_text(gleam_type: GleamType, column_literal: String) -> String {
   case gleam_type {
     IntType -> "decode.int"
     FloatType -> "decode.float"
@@ -170,16 +179,38 @@ pub fn decoder_text(gleam_type: GleamType) -> String {
     StringType -> "decode.string"
     BoolType -> "decode.bool"
     BitArrayType -> "decode.bit_array"
-    TimestampType -> "client.timestamp_decoder()"
-    TimestampWithTimeZoneType -> "client.timestamp_with_time_zone_decoder()"
-    DateType -> "client.calendar_date_decoder()"
+    TimestampType ->
+      finite(
+        "client.finite_timestamp",
+        "client.timestamp_decoder()",
+        column_literal,
+      )
+    TimestampWithTimeZoneType ->
+      finite(
+        "client.finite_timestamp",
+        "client.timestamp_with_time_zone_decoder()",
+        column_literal,
+      )
+    DateType ->
+      finite(
+        "client.finite_date",
+        "client.calendar_date_decoder()",
+        column_literal,
+      )
     TimeOfDayType -> "client.calendar_time_of_day_decoder()"
-    ListType(element) -> "decode.list(" <> decoder_text(element) <> ")"
+    ListType(element) ->
+      "decode.list(decode.optional("
+      <> decoder_text(element, column_literal)
+      <> "))"
   }
 }
 
+fn finite(wrapper: String, decoder: String, column_literal: String) -> String {
+  wrapper <> "(" <> decoder <> ", " <> column_literal <> ")"
+}
+
 /// Returns the value function of the type as a function, for example
-/// `client.int` or `client.array(client.int, _)`.
+/// `client.int` or `client.array(client.nullable(client.int, _), _)`.
 pub fn encoder_text(gleam_type: GleamType) -> String {
   case gleam_type {
     IntType -> "client.int"
@@ -190,7 +221,8 @@ pub fn encoder_text(gleam_type: GleamType) -> String {
     TimestampType | TimestampWithTimeZoneType -> "client.timestamp"
     DateType -> "client.calendar_date"
     TimeOfDayType -> "client.calendar_time_of_day"
-    ListType(element) -> "client.array(" <> encoder_text(element) <> ", _)"
+    ListType(element) ->
+      "client.array(" <> element_encoder_text(element) <> ", _)"
   }
 }
 
@@ -206,9 +238,18 @@ pub fn encode_call(
     True, _ ->
       "client.nullable(" <> encoder_text(gleam_type) <> ", " <> argument <> ")"
     False, ListType(element) ->
-      "client.array(" <> encoder_text(element) <> ", " <> argument <> ")"
+      "client.array("
+      <> element_encoder_text(element)
+      <> ", "
+      <> argument
+      <> ")"
     False, _ -> encoder_text(gleam_type) <> "(" <> argument <> ")"
   }
+}
+
+/// The value function of an array element, which can be NULL.
+fn element_encoder_text(element: GleamType) -> String {
+  "client.nullable(" <> encoder_text(element) <> ", _)"
 }
 
 fn decode_row(row: List(Option(String))) -> Result(#(Int, TypeFacts), Nil) {

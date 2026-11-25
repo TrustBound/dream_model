@@ -632,7 +632,8 @@ fn decoder_body(record: Record, fields: List(Field), file: String) -> String {
 }
 
 fn field_decoder(field: Field, file: String) -> String {
-  let decoder = gleam_type.decoder_text(field.gleam_type)
+  let decoder =
+    gleam_type.decoder_text(field.gleam_type, string_literal(field.column))
   case field.optional, field.promised {
     True, _ -> "decode.optional(" <> decoder <> ")"
     False, True ->
@@ -882,10 +883,15 @@ const query_error_helper =
   unique: List(#(String, String)),
 ) -> Error {
   let conflict = unique_message(client.violated_constraint(query_error), unique)
-  case conflict, client.broken_promise(query_error) {
-    Ok(message), _ -> error.Conflict(message)
-    Error(Nil), Ok(message) -> error.InternalServerError(message)
-    Error(Nil), Error(Nil) -> error.InternalServerError(query_name <> \" failed\")
+  let promise = client.broken_promise(query_error)
+  let infinite = client.infinite_value(query_error)
+  case conflict, promise, infinite {
+    Ok(message), _, _ -> error.Conflict(message)
+    Error(Nil), Ok(message), _ -> error.InternalServerError(message)
+    Error(Nil), Error(Nil), Ok(message) ->
+      error.InternalServerError(query_name <> \": \" <> message)
+    Error(Nil), Error(Nil), Error(Nil) ->
+      error.InternalServerError(query_name <> \" failed\")
   }
 }
 

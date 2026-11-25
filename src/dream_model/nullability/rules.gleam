@@ -21,7 +21,9 @@
 ////
 //// Parameters: a parameter is `Option` only when it is stored straight
 //// into a column that accepts NULL in every case (INSERT, UPDATE SET, ON
-//// CONFLICT DO UPDATE SET).
+//// CONFLICT DO UPDATE SET). A built-in length coercion around the
+//// parameter, such as the one of a `varchar(n)` column, keeps NULL as
+//// NULL, so the store is still straight.
 
 import dream_model/nullability/reason.{
   type ColumnReason, type Origin, type ParameterReason, Computed, Table,
@@ -60,6 +62,11 @@ const command_merge = "5"
 
 const pass_through = ["RELABELTYPE", "COERCETODOMAIN", "COLLATEEXPR"]
 
+/// `funcformat` of a function call that is a cast: `1` an explicit cast,
+/// `2` an implicit one, such as the length coercion of a `varchar(n)`
+/// column.
+const cast_formats = ["1", "2"]
+
 // --- Entry points ----------------------------------------------------------
 
 /// Returns the target entries of the query's result columns: the
@@ -96,7 +103,7 @@ pub fn decide_parameters(
   count: Int,
   catalog: Catalog,
 ) -> List(ParameterRule) {
-  let stores = parameter_stores(query)
+  let stores = parameter_stores(query, catalog)
   let occurrences = count_parameters(query, dict.new())
   list.repeat(Nil, count)
   |> list.index_map(fn(_, index) {
@@ -104,8 +111,9 @@ pub fn decide_parameters(
   })
 }
 
-/// Collects the relations, aggregate functions and operator functions that
-/// the query uses, so that the catalog can load their facts first.
+/// Collects the relations, aggregate functions, operator functions and
+/// cast functions that the query uses, so that the catalog can load their
+/// facts first.
 pub fn collect_catalog_oids(query: Node) -> CatalogOids {
   let found = collect(query, CatalogOids(relations: [], functions: []))
   CatalogOids(
@@ -595,8 +603,8 @@ type Store {
 
 /// The parameters that are stored straight into a column: the whole value
 /// of an INSERT or UPDATE target entry, or of an ON CONFLICT DO UPDATE SET
-/// entry, is the parameter.
-fn parameter_stores(query: Node) -> List(Store) {
+/// entry, is the parameter, also inside a built-in length coercion.
+fn parameter_stores(query: Node, catalog: Catalog) -> List(Store) {
   let target = get_integer(query, "resultRelation")
   let is_store_command =
     command(query) == command_insert || command(query) == command_update
@@ -609,7 +617,7 @@ fn parameter_stores(query: Node) -> List(Store) {
     node.items(conflict_entries),
   )
   |> list.filter_map(fn(entry) {
-    let value = comparable(node.get_field(entry, "expr"))
+    let value = stored_value(node.get_field(entry, "expr"), catalog)
     case is_external_parameter(value) {
       True ->
         Ok(Store(
@@ -620,6 +628,48 @@ fn parameter_stores(query: Node) -> List(Store) {
       False -> Error(Nil)
     }
   })
+}
+
+/// The value of a store without the nodes that keep NULL as NULL: the
+/// pass-through nodes, and a built-in length coercion.
+fn stored_value(expression: Node, catalog: Catalog) -> Node {
+  let is_pass_through = list.contains(pass_through, node.node_name(expression))
+  case is_pass_through, is_length_coercion(expression, catalog) {
+    True, _ -> stored_value(node.get_field(expression, "arg"), catalog)
+    False, True ->
+      stored_value(
+        node.get_item(node.get_field(expression, "args"), 0),
+        catalog,
+      )
+    False, False -> expression
+  }
+}
+
+/// A call of a built-in length coercion function as a cast, whose
+/// arguments after the value (the length and the explicit flag) are
+/// constants that are not NULL. The catalog says which functions are
+/// length coercions: the functions of a cast from a type to itself.
+fn is_length_coercion(expression: Node, catalog: Catalog) -> Bool {
+  let is_cast =
+    node.node_name(expression) == "FUNCEXPR"
+    && list.contains(
+      cast_formats,
+      node.text(node.get_field(expression, "funcformat")),
+    )
+  let is_coercion_function =
+    catalog.get_function(catalog, get_integer(expression, "funcid"))
+    |> result.map(fn(function) { function.is_length_coercion })
+    |> result.unwrap(False)
+  let has_constant_modifiers =
+    node.items(node.get_field(expression, "args"))
+    |> list.drop(1)
+    |> list.all(is_constant_not_null)
+  is_cast && is_coercion_function && has_constant_modifiers
+}
+
+fn is_constant_not_null(value: Node) -> Bool {
+  node.node_name(value) == "CONST"
+  && node.text(node.get_field(value, "constisnull")) == "false"
 }
 
 fn is_external_parameter(value: Node) -> Bool {
@@ -799,7 +849,22 @@ fn collect_oid(value: Node, found: CatalogOids) -> CatalogOids {
         get_integer(value, "opfuncid"),
         ..found.functions
       ])
+    "FUNCEXPR", _ -> collect_cast_function(value, found)
     _, _ -> found
+  }
+}
+
+/// A function call that is a cast can be a length coercion, which the
+/// parameter rules look up.
+fn collect_cast_function(value: Node, found: CatalogOids) -> CatalogOids {
+  let format = node.text(node.get_field(value, "funcformat"))
+  case list.contains(cast_formats, format) {
+    True ->
+      CatalogOids(..found, functions: [
+        get_integer(value, "funcid"),
+        ..found.functions
+      ])
+    False -> found
   }
 }
 

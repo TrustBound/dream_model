@@ -57,7 +57,13 @@ pub fn created_at(
   "select created_at from users where id = $1"
   |> client.query
   |> client.parameter(client.int(id))
-  |> client.returning(decode.at([0], client.timestamp_with_time_zone_decoder()))
+  |> client.returning(decode.at(
+    [0],
+    client.finite_timestamp(
+      client.timestamp_with_time_zone_decoder(),
+      "created_at",
+    ),
+  ))
   |> client.execute(db)
   |> one_row("user.created_at", "User not found", [])
 }
@@ -221,10 +227,15 @@ fn query_error_to_error(
   unique: List(#(String, String)),
 ) -> Error {
   let conflict = unique_message(client.violated_constraint(query_error), unique)
-  case conflict, client.broken_promise(query_error) {
-    Ok(message), _ -> error.Conflict(message)
-    Error(Nil), Ok(message) -> error.InternalServerError(message)
-    Error(Nil), Error(Nil) -> error.InternalServerError(query_name <> " failed")
+  let promise = client.broken_promise(query_error)
+  let infinite = client.infinite_value(query_error)
+  case conflict, promise, infinite {
+    Ok(message), _, _ -> error.Conflict(message)
+    Error(Nil), Ok(message), _ -> error.InternalServerError(message)
+    Error(Nil), Error(Nil), Ok(message) ->
+      error.InternalServerError(query_name <> ": " <> message)
+    Error(Nil), Error(Nil), Error(Nil) ->
+      error.InternalServerError(query_name <> " failed")
   }
 }
 

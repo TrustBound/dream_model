@@ -467,10 +467,15 @@ fn query_error_to_error(
   unique: List(#(String, String)),
 ) -> Error {
   let conflict = unique_message(client.violated_constraint(query_error), unique)
-  case conflict, client.broken_promise(query_error) {
-    Ok(message), _ -> error.Conflict(message)
-    Error(Nil), Ok(message) -> error.InternalServerError(message)
-    Error(Nil), Error(Nil) -> error.InternalServerError(query_name <> \" failed\")
+  let promise = client.broken_promise(query_error)
+  let infinite = client.infinite_value(query_error)
+  case conflict, promise, infinite {
+    Ok(message), _, _ -> error.Conflict(message)
+    Error(Nil), Ok(message), _ -> error.InternalServerError(message)
+    Error(Nil), Error(Nil), Ok(message) ->
+      error.InternalServerError(query_name <> \": \" <> message)
+    Error(Nil), Error(Nil), Error(Nil) ->
+      error.InternalServerError(query_name <> \" failed\")
   }
 }
 

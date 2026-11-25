@@ -62,7 +62,15 @@ pub type Domain {
 
 /// A function (`pg_proc` row).
 pub type Function {
-  Function(name: String, schema: String)
+  Function(
+    name: String,
+    schema: String,
+    /// True for a built-in length coercion function: the function of a
+    /// cast from a type to the same type (`pg_cast`), such as the one that
+    /// cuts a value to the length of a `varchar(n)` column. Such a
+    /// function is strict, so it keeps NULL as NULL.
+    is_length_coercion: Bool,
+  )
 }
 
 /// The facts read so far.
@@ -289,7 +297,11 @@ fn load_domains(
 // --- Functions -------------------------------------------------------------
 
 const functions_sql =
-  "select p.oid, p.proname, n.nspname
+  "select p.oid, p.proname, n.nspname,
+  p.oid < 16384 and p.proisstrict and exists (
+    select from pg_catalog.pg_cast c
+    where c.castfunc = p.oid and c.castsource = c.casttarget
+  )
 from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
 where p.oid = any($1::oid[])"
 
@@ -400,7 +412,8 @@ fn decode_function_row(
   use oid <- result.try(get_integer(row, 0))
   use name <- result.try(get_text(row, 1))
   use schema <- result.try(get_text(row, 2))
-  Ok(#(oid, Function(name:, schema:)))
+  use is_length_coercion <- result.try(get_boolean(row, 3))
+  Ok(#(oid, Function(name:, schema:, is_length_coercion:)))
 }
 
 fn get_text(row: List(Option(String)), index: Int) -> Result(String, Nil) {

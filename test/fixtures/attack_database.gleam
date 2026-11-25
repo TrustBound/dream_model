@@ -46,8 +46,10 @@ create trigger t_reject before insert on users for each row execute function rej
 /// More schema for the computed values that are never NULL: an enum with
 /// an equality operator that returns NULL, and an aggregate named `count`
 /// outside `pg_catalog` that returns NULL. Also, for parameters: domains
-/// with a CHECK and without rules, a table with row-level security, and a
-/// partition with a CHECK.
+/// with a CHECK and without rules, a table with row-level security, a
+/// partition with a CHECK, and the `sized` tables, whose columns have a
+/// length or a precision, so that a stored parameter is inside a length
+/// coercion.
 pub const schema_computed =
   "
 create type mood as enum ('happy', 'sad');
@@ -62,6 +64,19 @@ create table secured (id int primary key, note text);
 alter table secured enable row level security;
 create table measures (id int not null, kind text not null, value text) partition by list (kind);
 create table measures_a partition of measures (constraint value_check check (value <> '')) for values in ('a');
+create table sized (id int primary key, label varchar(10), code char(3), flags bit(4), more_flags varbit(8), amount numeric(8, 2), happened timestamp(0), happened_zone timestamptz(0), clock time(0), span interval day to second(0));
+create table sized_checked (id int primary key, label varchar(10) check (label <> ''));
+create domain short_text as varchar(10) check (value <> '');
+create domain short_required as varchar(10) not null;
+create table sized_domains (id int primary key, checked short_text, required short_required);
+create table sized_triggered (id int primary key, label varchar(10));
+create function keep_label() returns trigger language plpgsql as $$ begin return new; end $$;
+create trigger t_keep before insert or update on sized_triggered for each row execute function keep_label();
+create table sized_secured (id int primary key, label varchar(10));
+alter table sized_secured enable row level security;
+create table sized_events (id int not null, kind text not null, label varchar(10)) partition by list (kind);
+create table sized_events_a partition of sized_events for values in ('a');
+create table sized_events_b partition of sized_events (label not null) for values in ('b');
 "
 
 /// The schema for PostgreSQL 18 and newer.

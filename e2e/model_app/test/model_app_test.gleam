@@ -93,6 +93,32 @@ fn check_posts(db: client.Connection) -> Nil {
   show_error("post.total of a user with no posts", post.total(db, 2))
 }
 
+/// Stores infinity in a row, and shows the error of sample.get for each
+/// time column that holds it.
+fn check_infinity(db: client.Connection) -> Nil {
+  run(db, "update samples set happened_at = 'infinity' where id = 1")
+  show_error("sample.get of an infinite timestamp", sample.get(db, 1))
+  run(
+    db,
+    "update samples set happened_at = null, happened_at_zone = '-infinity' where id = 1",
+  )
+  show_error("sample.get of an infinite timestamptz", sample.get(db, 1))
+  run(
+    db,
+    "update samples set happened_at_zone = null, day = 'infinity' where id = 1",
+  )
+  show_error("sample.get of an infinite date", sample.get(db, 1))
+  run(db, "update samples set day = null where id = 1")
+}
+
+fn run(db: client.Connection, sql: String) -> Nil {
+  let assert Ok(_) =
+    sql
+    |> client.query
+    |> client.execute(db)
+  Nil
+}
+
 fn check_samples(db: client.Connection) -> Nil {
   let happened_at =
     timestamp.from_calendar(
@@ -109,8 +135,8 @@ fn check_samples(db: client.Connection) -> Nil {
       Some(1.5),
       Some(2.25),
       Some(12.5),
-      "first",
-      "abc",
+      Some("first"),
+      Some("abc"),
       Some("short"),
       Some("Mixed"),
       Some("{\"a\": 1}"),
@@ -123,8 +149,8 @@ fn check_samples(db: client.Connection) -> Nil {
       Some(happened_at),
       Some(calendar.Date(2024, calendar.February, 29)),
       Some(calendar.TimeOfDay(13, 14, 15, 0)),
-      Some(["a", "b"]),
-      Some([1, 2]),
+      Some([Some("a"), None]),
+      Some([Some(1), Some(2)]),
       5,
     )
   show("sample.insert", inserted)
@@ -134,6 +160,12 @@ fn check_samples(db: client.Connection) -> Nil {
     sample.get(db, 1)
       |> result.map(fn(found) { found.happened_at == Some(happened_at) }),
   )
+  show(
+    "array with a NULL element round trip",
+    sample.get(db, 1)
+      |> result.map(fn(found) { found.tags == Some([Some("a"), None]) }),
+  )
+  check_infinity(db)
   show_error(
     "sample.insert of a taken label",
     sample.insert(
@@ -144,8 +176,8 @@ fn check_samples(db: client.Connection) -> Nil {
       None,
       None,
       None,
-      "first",
-      "xyz",
+      Some("first"),
+      Some("xyz"),
       None,
       None,
       None,

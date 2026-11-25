@@ -112,7 +112,13 @@ pub fn tests(version: Int) -> TestSuite {
       "get_function returns the name and schema of a function",
       version,
       fn(catalog, _oids) { catalog.get_function(catalog, 2803) },
-      Ok(Function("count", "pg_catalog")),
+      Ok(Function("count", "pg_catalog", False)),
+    ),
+    catalog_case(
+      "get_function says that the varchar length coercion is one",
+      version,
+      fn(catalog, _oids) { catalog.get_function(catalog, 669) },
+      Ok(Function("varchar", "pg_catalog", True)),
     ),
     catalog_case(
       "get_relation returns an error for a relation that was not loaded",
@@ -161,8 +167,9 @@ fn catalog_case(
 
     // Act
     let assert Ok(loaded) =
-      catalog.load(catalog.new(version), connection, relations, [2803])
-    let assert Ok(loaded) = catalog.load(loaded, connection, relations, [2803])
+      catalog.load(catalog.new(version), connection, relations, [2803, 669])
+    let assert Ok(loaded) =
+      catalog.load(loaded, connection, relations, [2803, 669])
     let _ = wire.close(connection)
 
     // Assert

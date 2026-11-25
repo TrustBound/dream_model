@@ -159,7 +159,11 @@ pub fn attacks(version: Int) -> List(Attack) {
     True -> reason.OuterJoinOrGroupingSet
     False -> reason.GroupingSet
   }
-  list.append(proof_of_concept_attacks(grouping), computed_attacks(grouping))
+  list.flatten([
+    proof_of_concept_attacks(grouping),
+    computed_attacks(grouping),
+    length_coercion_attacks(),
+  ])
 }
 
 /// The 118 attacks of the proof of concept.
@@ -1650,6 +1654,177 @@ fn attack(name: String, sql: String, expected: Expected) -> Attack {
 /// The attacks on the computed values that are never NULL: count,
 /// constants, coalesce, EXISTS, IS NULL and IS DISTINCT FROM, on the
 /// nullable side of outer joins, in grouping sets and in set operations.
+/// The attacks on a parameter inside a length coercion: the coercion keeps
+/// NULL as NULL, so a store into a nullable column is `Option`, and every
+/// other rule still makes the parameter required.
+fn length_coercion_attacks() -> List(Attack) {
+  [
+    Attack(
+      name: "param into columns with a length or a precision",
+      minimum_version: 16,
+      sql: "insert into sized (id, label, code, flags, more_flags, amount, happened, happened_zone, clock, span) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, True, reason.StoredIntoNullableColumn),
+          parameter(3, True, reason.StoredIntoNullableColumn),
+          parameter(4, True, reason.StoredIntoNullableColumn),
+          parameter(5, True, reason.StoredIntoNullableColumn),
+          parameter(6, True, reason.StoredIntoNullableColumn),
+          parameter(7, True, reason.StoredIntoNullableColumn),
+          parameter(8, True, reason.StoredIntoNullableColumn),
+          parameter(9, True, reason.StoredIntoNullableColumn),
+          parameter(10, True, reason.StoredIntoNullableColumn),
+        ],
+      ),
+      parameter_sets: Some([
+        [
+          Some("300"),
+          Some("abc"),
+          Some("x"),
+          Some("1010"),
+          Some("101"),
+          Some("1.5"),
+          Some("2024-01-01 10:00:00"),
+          Some("2024-01-01 10:00:00+00"),
+          Some("13:14:15"),
+          Some("1 day"),
+        ],
+      ]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param in explicit varchar(n) cast into varchar(n) column",
+      minimum_version: 16,
+      sql: "insert into sized (id, label) values ($1, $2::varchar(10)) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, True, reason.StoredIntoNullableColumn),
+        ],
+      ),
+      parameter_sets: Some([[Some("301"), Some("abc")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into varchar(n) column by update",
+      minimum_version: 16,
+      sql: "update sized set label = $2 where id = $1 returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.Required),
+          parameter(2, True, reason.StoredIntoNullableColumn),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("abc")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into varchar(n) column in upsert set",
+      minimum_version: 16,
+      sql: "insert into sized (id) values ($1) on conflict (id) do update set label = $2 returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, True, reason.StoredIntoNullableColumn),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("abc")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param in a function into varchar(n) column",
+      minimum_version: 16,
+      sql: "insert into sized (id, label) values ($1, upper($2)) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.Required),
+        ],
+      ),
+      parameter_sets: Some([[Some("302"), Some("abc")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into varchar(n) column with CHECK",
+      minimum_version: 16,
+      sql: "insert into sized_checked (id, label) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.CheckConstraint),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("abc")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into varchar(n) domain columns",
+      minimum_version: 16,
+      sql: "insert into sized_domains (id, checked, required) values ($1, $2, $3) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.DomainCheck),
+          parameter(3, False, reason.DomainNotNull),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("abc"), Some("def")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into varchar(n) column with trigger",
+      minimum_version: 16,
+      sql: "insert into sized_triggered (id, label) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.BeforeTrigger),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("abc")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into varchar(n) column with row-level security",
+      minimum_version: 16,
+      sql: "insert into sized_secured (id, label) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.RowLevelSecurity),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("abc")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into varchar(n) column, stricter partition",
+      minimum_version: 16,
+      sql: "insert into sized_events (id, kind, label) values ($1, $2, $3) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.ColumnIsNotNull),
+          parameter(3, False, reason.PartitionNotNull),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("b"), Some("abc")]]),
+      outcome: Sound,
+    ),
+  ]
+}
+
 fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
   [
     attack(

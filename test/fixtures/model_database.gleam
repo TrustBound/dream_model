@@ -34,6 +34,16 @@ create rule log_insert as on insert to logged do also insert into log values (ne
 create table spans (id int primary key, span interval, label text unique);
 create table \"Odd Names\" (\"Mixed Case\" int primary key, \"type\" text);
 create table reserved_names (db int primary key, \"9lives\" int, decode int);
+create table accounts (id int primary key, handle text constraint accounts_handle_key unique);
+create table audits (id int primary key, handle text constraint accounts_handle_key check (handle <> ''));
+create table badges (id int primary key, code text);
+create unique index badges_code_index on badges (code);
+create schema archive;
+create table archive.badges (code text);
+create index badges_code_index on archive.badges (code);
+create table teams (id int constraint teams_id_key unique);
+create table members (team_id int constraint teams_id_key references teams (id));
+create domain team_code as text constraint teams_id_key check (value <> '');
 "
 
 /// Drops and creates both databases on the server of a version.
