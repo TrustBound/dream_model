@@ -4,6 +4,8 @@
 //// them. `column_reason_to_string` and `parameter_reason_to_string` give
 //// the text for messages.
 
+import gleam/int
+
 /// Where the value of a result column comes from.
 pub type Origin {
   /// A stored table column, maybe through views, subqueries, CTEs, joins
@@ -114,6 +116,28 @@ pub type ParameterReason {
   BeforeTrigger
   /// A row-level security policy can reject the row.
   RowLevelSecurity
+  /// A rule rewrites the statement into more than one query. The other
+  /// queries can use the parameter anywhere, so every parameter is
+  /// required.
+  RuleAddsQueries(queries: Int)
+  /// The value goes into a domain type that is NOT NULL: a cast of the
+  /// parameter to the domain, or the parameter's own type.
+  CastToNotNullDomain
+  /// The value goes into a domain type that has a CHECK.
+  CastToDomainWithCheck
+  /// A generated column is computed from the column, and its NOT NULL or
+  /// its CHECK can reject the row.
+  GeneratedColumnUsesIt
+  /// The column is part of a partition key: a NULL can find no partition.
+  PartitionKey
+  /// The statement writes through a view WITH CHECK OPTION, which can
+  /// reject the row.
+  ViewCheckOption
+  /// The statement writes into a relation that is not a table, or one of
+  /// its partitions or child tables is not a table: a view with an INSTEAD
+  /// OF trigger (`v`) or a foreign table (`f`). dream_model cannot read
+  /// what the trigger or the remote server accepts.
+  RelationNotTable(kind: String)
 }
 
 /// Returns the text of a column reason.
@@ -168,5 +192,21 @@ pub fn parameter_reason_to_string(reason: ParameterReason) -> String {
     PartitionCheck -> "a CHECK constraint on a partition may reject NULL"
     BeforeTrigger -> "a BEFORE trigger on the table can reject any value"
     RowLevelSecurity -> "a row-level security policy can reject the row"
+    RuleAddsQueries(queries) ->
+      "a rule rewrites the statement into "
+      <> int.to_string(queries)
+      <> " queries, so every parameter is required"
+    CastToNotNullDomain -> "the parameter is cast to a NOT NULL domain type"
+    CastToDomainWithCheck ->
+      "the parameter is cast to a domain type with a CHECK constraint that may reject NULL"
+    GeneratedColumnUsesIt ->
+      "a generated column is computed from this column and may reject NULL"
+    PartitionKey ->
+      "the column is in a partition key, and a NULL may find no partition"
+    ViewCheckOption -> "a view's WITH CHECK OPTION may reject the row"
+    RelationNotTable(kind) ->
+      "the statement writes into relation kind "
+      <> kind
+      <> " (a view with an INSTEAD OF trigger or a foreign table), which may reject NULL"
   }
 }

@@ -163,6 +163,7 @@ pub fn attacks(version: Int) -> List(Attack) {
     proof_of_concept_attacks(grouping),
     computed_attacks(grouping),
     length_coercion_attacks(),
+    review_attacks(),
   ])
 }
 
@@ -1657,6 +1658,227 @@ fn attack(name: String, sql: String, expected: Expected) -> Attack {
 /// The attacks on a parameter inside a length coercion: the coercion keeps
 /// NULL as NULL, so a store into a nullable column is `Option`, and every
 /// other rule still makes the parameter required.
+/// The attacks of the review of 1.0.0: rules that add queries, domain
+/// casts of a parameter, facts that reject NULL in a store, and foreign
+/// tables.
+fn review_attacks() -> List(Attack) {
+  let required_ids = fn(why) { [parameter(1, False, why)] }
+  [
+    Attack(
+      name: "DO ALSO rule writes the parameter into a NOT NULL column",
+      minimum_version: 16,
+      sql: "insert into logged (id, note) values ($1, $2) returning id, note",
+      expected: Decided(
+        columns: [
+          column("id", True, Table, reason.NotNullInSchema),
+          column("note", False, Table, reason.ColumnAllowsNull),
+        ],
+        parameters: [
+          parameter(1, False, reason.RuleAddsQueries(2)),
+          parameter(2, False, reason.RuleAddsQueries(2)),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param cast to a NOT NULL domain",
+      minimum_version: 16,
+      sql: "insert into notes (id, plain_text) values ($1, $2::strict_text) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.CastToNotNullDomain),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param cast to text, then to a NOT NULL domain",
+      minimum_version: 16,
+      sql: "insert into notes (id, plain_text) values ($1, $2::text::strict_text) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.CastToNotNullDomain),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param cast to a domain with a CHECK",
+      minimum_version: 16,
+      sql: "insert into notes (id, plain_text) values ($1, $2::text::checked_text) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.CastToDomainWithCheck),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param cast to a NOT NULL varchar(n) domain, in a length coercion",
+      minimum_version: 16,
+      sql: "insert into sized (id, label) values ($1, $2::text::short_required) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.CastToNotNullDomain),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param feeds a generated NOT NULL column",
+      minimum_version: 16,
+      sql: "insert into gen_from (id, a) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.GeneratedColumnUsesIt),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into a partition key column",
+      minimum_version: 16,
+      sql: "insert into keyed (id, kind) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.PartitionKey),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("a")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into a view WITH CHECK OPTION",
+      minimum_version: 16,
+      sql: "insert into wco_view (id, note) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.ViewCheckOption),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into a view with an INSTEAD OF trigger",
+      minimum_version: 16,
+      sql: "insert into iot_view (id, note) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [
+          column("id", False, Table, reason.RelationKindWithoutNotNull("v")),
+        ],
+        parameters: [
+          parameter(1, False, reason.RelationNotTable("v")),
+          parameter(2, False, reason.RelationNotTable("v")),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into a foreign table",
+      minimum_version: 16,
+      sql: "insert into remote_notes (id, note) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [
+          column("id", False, Table, reason.RelationKindWithoutNotNull("f")),
+        ],
+        parameters: [
+          parameter(1, False, reason.RelationNotTable("f")),
+          parameter(2, False, reason.RelationNotTable("f")),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into a table with a foreign partition",
+      minimum_version: 16,
+      sql: "insert into fpart (id, kind, note) values ($1, $2, $3) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.ColumnIsNotNull),
+          parameter(3, False, reason.RelationNotTable("f")),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("r"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "foreign child table of a NOT NULL column",
+      minimum_version: 16,
+      sql: "select id from fparent",
+      expected: Decided(
+        columns: [
+          column("id", False, Table, reason.RelationKindWithoutNotNull("f")),
+        ],
+        parameters: [],
+      ),
+      parameter_sets: None,
+      outcome: Sound,
+    ),
+    Attack(
+      name: "hint lines after the statement are plain comments",
+      minimum_version: 16,
+      sql: "select email from users where id = $1\n-- params: id?\n-- nullable: email",
+      expected: Decided(
+        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        parameters: [parameter(1, False, reason.Required)],
+      ),
+      parameter_sets: None,
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into a table with a whole-row CHECK",
+      minimum_version: 16,
+      sql: "insert into whole_checked (id, note) values ($1, $2) returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: [
+          parameter(1, False, reason.ColumnIsNotNull),
+          parameter(2, False, reason.CheckConstraint),
+        ],
+      ),
+      parameter_sets: Some([[Some("300"), Some("n")]]),
+      outcome: Sound,
+    ),
+    Attack(
+      name: "param into a table with a CHECK that names no column",
+      minimum_version: 16,
+      sql: "update free_checked set note = $2 where id = $1 returning id",
+      expected: Decided(
+        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        parameters: required_ids(reason.Required)
+          |> list.append([parameter(2, False, reason.CheckConstraint)]),
+      ),
+      parameter_sets: None,
+      outcome: Sound,
+    ),
+  ]
+}
+
 fn length_coercion_attacks() -> List(Attack) {
   [
     Attack(

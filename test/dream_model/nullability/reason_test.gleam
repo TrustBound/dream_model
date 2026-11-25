@@ -137,5 +137,33 @@ fn cases() -> List(#(Reason, String)) {
       parameter(reason.RowLevelSecurity),
       "a row-level security policy can reject the row",
     ),
+    #(
+      parameter(reason.RuleAddsQueries(2)),
+      "a rule rewrites the statement into 2 queries, so every parameter is required",
+    ),
+    #(
+      parameter(reason.CastToNotNullDomain),
+      "the parameter is cast to a NOT NULL domain type",
+    ),
+    #(
+      parameter(reason.CastToDomainWithCheck),
+      "the parameter is cast to a domain type with a CHECK constraint that may reject NULL",
+    ),
+    #(
+      parameter(reason.GeneratedColumnUsesIt),
+      "a generated column is computed from this column and may reject NULL",
+    ),
+    #(
+      parameter(reason.PartitionKey),
+      "the column is in a partition key, and a NULL may find no partition",
+    ),
+    #(
+      parameter(reason.ViewCheckOption),
+      "a view's WITH CHECK OPTION may reject the row",
+    ),
+    #(
+      parameter(reason.RelationNotTable("f")),
+      "the statement writes into relation kind f (a view with an INSTEAD OF trigger or a foreign table), which may reject NULL",
+    ),
   ]
 }

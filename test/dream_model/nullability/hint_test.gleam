@@ -40,6 +40,20 @@ pub fn tests() -> TestSuite {
         ))
         |> or_fail_with("Expected every hint")
       }),
+      it("reads only the comment block at the top of the file", fn() {
+        // Arrange
+        let sql =
+          "-- not null: a\n\n-- nullable: b\nselect a, b\n-- params: id?\n-- nullable: email\nfrom t"
+
+        // Act
+        let hints = hint.parse_hints(sql)
+
+        // Assert
+        hints
+        |> should
+        |> be_equal(Hints(not_null: ["a"], nullable: ["b"], parameters: None))
+        |> or_fail_with("Expected only the hints before the statement")
+      }),
       it("takes the last params line", fn() {
         // Arrange
         let sql = "-- params: a?\n-- params: b"

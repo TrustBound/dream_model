@@ -30,10 +30,12 @@ pub type Outcome {
 /// skipped, as in the proof of concept.
 const rejected_by_data = [
   "23502", "23514", "23505", "23503", "22P02", "22003", "P0001", "21000",
+  "44000",
 ]
 
-/// The SQLSTATE codes that show a NULL parameter was rejected.
-const null_rejected = ["23502", "23514", "P0001"]
+/// The SQLSTATE codes that show a NULL parameter was rejected. 44000 is a
+/// view's WITH CHECK OPTION.
+const null_rejected = ["23502", "23514", "P0001", "44000"]
 
 type Found {
   Found(breaks: List(String), promises: List(String))

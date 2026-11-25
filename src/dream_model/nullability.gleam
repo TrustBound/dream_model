@@ -146,14 +146,13 @@ pub fn connect(url: String) -> Result(Analyzer, AnalysisError) {
   result.map_error(opened, close_after_failure(catalog_connection, _))
 }
 
-/// Closes the connection after a failure, and returns the failure: it says
-/// more than an error of the goodbye message, which only repeats that the
-/// connection is unusable.
+/// Closes the connection after a failure, without a goodbye message, and
+/// returns the failure.
 fn close_after_failure(
   connection: wire.Connection,
   error: AnalysisError,
 ) -> AnalysisError {
-  let _goodbye = wire.close(connection)
+  wire.abort(connection)
   error
 }
 
@@ -183,7 +182,7 @@ pub fn analyze(
     tree.capture(analyzer.tree_connection, sql)
     |> result.map_error(TreeFailed),
   )
-  let tree.Captured(query:, description:) = captured
+  let tree.Captured(query:, description:, queries:) = captured
   let oids = rules.collect_catalog_oids(query)
   use catalog <- result.try(
     catalog.load(
@@ -191,6 +190,7 @@ pub fn analyze(
       analyzer.catalog_connection,
       oids.relations,
       oids.functions,
+      oids.types,
     )
     |> result.map_error(DatabaseFailed),
   )
@@ -218,6 +218,7 @@ pub fn analyze(
     rules.decide_parameters(
       query,
       list.length(description.parameter_types),
+      queries,
       catalog,
     )
     |> list.zip(description.parameter_types)

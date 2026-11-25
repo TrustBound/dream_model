@@ -10,6 +10,10 @@
 //// - `-- params:` names the parameters in order. A name that ends with `?`
 ////   makes that parameter `Option`.
 ////
+//// Only the comment block at the top of the file counts: the `--` lines
+//// and the blank lines before the first other line. A hint line after
+//// the start of the statement is a plain comment.
+////
 //// The keys do not depend on case. A later `-- params:` line replaces an
 //// earlier one.
 
@@ -30,9 +34,23 @@ pub type Hints {
 
 /// Reads the hint lines of a SQL text.
 pub fn parse_hints(sql: String) -> Hints {
+  leading_lines(sql)
+  |> list.fold(Hints(not_null: [], nullable: [], parameters: None), add_line)
+}
+
+/// Returns the lines of the comment block at the top of a SQL text: the
+/// `--` lines and the blank lines before the first other line. The first
+/// line of the result is line 1 of the text.
+pub fn leading_lines(sql: String) -> List(String) {
   sql
   |> string.split("\n")
-  |> list.fold(Hints(not_null: [], nullable: [], parameters: None), add_line)
+  |> list.take_while(fn(line) {
+    case string.trim(line) {
+      "" -> True
+      "--" <> _ -> True
+      _ -> False
+    }
+  })
 }
 
 /// Returns True when the `-- params:` hint marks the parameter at

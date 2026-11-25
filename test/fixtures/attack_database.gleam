@@ -79,6 +79,51 @@ create table sized_events_a partition of sized_events for values in ('a');
 create table sized_events_b partition of sized_events (label not null) for values in ('b');
 "
 
+/// The schema of the review attacks: a DO ALSO rule, a table for domain
+/// casts of a parameter, a generated column, a partition key, a view WITH
+/// CHECK OPTION, a view with an INSTEAD OF trigger, whole-row and
+/// column-free CHECK constraints, and foreign tables of postgres_fdw over
+/// the same database: a foreign table, a foreign child table and a foreign
+/// partition. The foreign rows are committed, so a rolled-back run sees
+/// them.
+pub const schema_review =
+  "
+create table logged (id int primary key, note text);
+create table log (note text not null);
+create rule log_note as on insert to logged do also insert into log values (new.note);
+create table notes (id int primary key, plain_text text);
+create table gen_from (id int primary key, a text, b text generated always as (upper(a)) stored not null);
+create table keyed (id int not null, kind text) partition by list (kind);
+create table keyed_a partition of keyed for values in ('a');
+create table keyed_expression (id int not null, kind text) partition by list (lower(kind));
+create function noop_statement() returns trigger language plpgsql as $$ begin return null; end $$;
+create table statement_triggered (id int primary key, note text);
+create trigger t_statement before insert on statement_triggered for each statement execute function noop_statement();
+create table after_triggered (id int primary key, note text);
+create trigger t_after after insert on after_triggered for each row execute function noop_statement();
+create table wco_base (id int primary key, note text);
+create view wco_view as select id, note from wco_base where note is not null with check option;
+create table iot_base (id int primary key, note text);
+create view iot_view as select id, note from iot_base;
+create function iot_insert() returns trigger language plpgsql as $$
+begin if new.note is null then raise exception 'note required'; end if; insert into iot_base values (new.id, new.note); return new; end $$;
+create trigger t_iot instead of insert on iot_view for each row execute function iot_insert();
+create table whole_checked (id int primary key, note text, constraint whole_row check (whole_checked is not null));
+create table free_checked (id int primary key, note text, constraint no_column check (pg_catalog.now() is not null));
+create extension if not exists postgres_fdw;
+do $$ begin execute format('create server loopback foreign data wrapper postgres_fdw options (host %L, port %L, dbname %L)', 'localhost', '5432', pg_catalog.current_database()); end $$;
+create user mapping for current_user server loopback options (user 'dream', password 'dream');
+create table remote_source (id int, note text);
+insert into remote_source values (null, null);
+create table remote_parts (id int, kind text, note text not null);
+create foreign table remote_notes (id int, note text) server loopback options (table_name 'remote_source');
+create table fparent (id int not null, note text);
+create foreign table fchild () inherits (fparent) server loopback options (table_name 'remote_source');
+create table fpart (id int not null, kind text not null, note text) partition by list (kind);
+create table fpart_a partition of fpart for values in ('a');
+create foreign table fpart_r partition of fpart for values in ('r') server loopback options (table_name 'remote_parts');
+"
+
 /// The schema for PostgreSQL 18 and newer.
 pub const schema_18 =
   "
@@ -146,6 +191,7 @@ pub fn create(version: Int) -> Result(Nil, String) {
   let filled = {
     use _ <- result.try(wire.simple_query(connection, schema))
     use _ <- result.try(wire.simple_query(connection, schema_computed))
+    use _ <- result.try(wire.simple_query(connection, schema_review))
     case version >= 18 {
       True -> wire.simple_query(connection, schema_18)
       False -> Ok([])

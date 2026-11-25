@@ -26,7 +26,14 @@ pub const newest_version = 19
 
 /// The analyzed query, and what Describe told about the statement.
 pub type Captured {
-  Captured(query: Node, description: wire.Description)
+  Captured(
+    query: Node,
+    description: wire.Description,
+    /// The number of queries that rewriting gave. It is more than 1 when a
+    /// rule adds queries, for example a `DO ALSO` rule. The other queries
+    /// run too, and can use each parameter anywhere.
+    queries: Int,
+  )
 }
 
 /// Why the query tree cannot be used.
@@ -90,7 +97,7 @@ pub fn capture(
       node.text(node.get_field(query, "canSetTag")) == "true"
     })
   case main {
-    [query] -> Ok(Captured(query:, description:))
+    [query] -> Ok(Captured(query:, description:, queries: list.length(queries)))
     _ -> Error(WrongQueryCount(list.length(queries), list.length(main)))
   }
 }

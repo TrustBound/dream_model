@@ -23,7 +23,13 @@
 //// into a column that accepts NULL in every case (INSERT, UPDATE SET, ON
 //// CONFLICT DO UPDATE SET). A built-in length coercion around the
 //// parameter, such as the one of a `varchar(n)` column, keeps NULL as
-//// NULL, so the store is still straight.
+//// NULL, so the store is still straight. A cast to a domain on the way,
+//// or a domain type of the parameter itself, must accept NULL too. The
+//// target and each of its partitions and child tables must be a table,
+//// and nothing else may reject NULL in the column: a CHECK, a partition
+//// key, a generated column computed from it, a row-level BEFORE trigger,
+//// row-level security or a view's WITH CHECK OPTION. When a rule rewrites
+//// the statement into more than one query, every parameter is required.
 
 import dream_model/nullability/reason.{
   type ColumnReason, type Origin, type ParameterReason, Computed, Table,
@@ -47,9 +53,9 @@ pub type ParameterRule {
   ParameterRule(optional: Bool, reason: ParameterReason)
 }
 
-/// The relations and functions whose catalog facts the rules need.
+/// The relations, functions and types whose catalog facts the rules need.
 pub type CatalogOids {
-  CatalogOids(relations: List(Int), functions: List(Int))
+  CatalogOids(relations: List(Int), functions: List(Int), types: List(Int))
 }
 
 const command_select = "1"
@@ -97,17 +103,29 @@ pub fn trace_output_columns(
 }
 
 /// Decides each parameter of the query. `count` is the number of
-/// parameters that Describe reported.
+/// parameters that Describe reported, and `queries` the number of queries
+/// that rewriting gave. When a rule adds queries, they run too and can use
+/// each parameter anywhere, so every parameter is required.
 pub fn decide_parameters(
   query: Node,
   count: Int,
+  queries: Int,
   catalog: Catalog,
 ) -> List(ParameterRule) {
+  use <- bool.guard(
+    when: queries > 1,
+    return: list.repeat(
+      ParameterRule(False, reason.RuleAddsQueries(queries)),
+      count,
+    ),
+  )
   let stores = parameter_stores(query, catalog)
   let occurrences = count_parameters(query, dict.new())
+  let has_check_option =
+    node.items(node.get_field(query, "withCheckOptions")) != []
   list.repeat(Nil, count)
   |> list.index_map(fn(_, index) {
-    decide_parameter(index + 1, stores, occurrences, catalog)
+    decide_parameter(index + 1, stores, occurrences, has_check_option, catalog)
   })
 }
 
@@ -115,10 +133,12 @@ pub fn decide_parameters(
 /// cast functions that the query uses, so that the catalog can load their
 /// facts first.
 pub fn collect_catalog_oids(query: Node) -> CatalogOids {
-  let found = collect(query, CatalogOids(relations: [], functions: []))
+  let found =
+    collect(query, CatalogOids(relations: [], functions: [], types: []))
   CatalogOids(
     relations: list.unique(found.relations),
     functions: list.unique(found.functions),
+    types: list.unique(found.types),
   )
 }
 
@@ -511,6 +531,8 @@ fn column_not_null(
 }
 
 /// A scan of a table with `inh` reads every child table and partition too.
+/// Each of them must be a table: a foreign table does not enforce NOT
+/// NULL.
 fn scanned_tables(oid: Int, relation: Relation, inherits: Bool) -> List(Int) {
   case inherits {
     True -> [oid, ..relation.descendants]
@@ -529,6 +551,8 @@ fn check_table_column(
     Ok(#(relation, attribute))
   }
   case found {
+    Ok(#(relation, _)) if relation.kind != "r" && relation.kind != "p" ->
+      Error(reason.RelationKindWithoutNotNull(relation.kind))
     Ok(#(relation, attribute)) if attribute.not_null ->
       refuse_when(
         list.contains(relation.not_valid_not_null, name),
@@ -598,7 +622,17 @@ fn trace_cte(
 // --- Parameters ------------------------------------------------------------
 
 type Store {
-  Store(parameter: Int, relation: Int, column: Int)
+  Store(
+    parameter: Int,
+    relation: Int,
+    column: Int,
+    /// The domain types that the value is cast to on its way to the
+    /// column, outermost first.
+    domains: List(Int),
+    /// The type of the parameter, which can be a domain itself, for
+    /// example in `$1::strict_text`.
+    parameter_type: Int,
+  )
 }
 
 /// The parameters that are stored straight into a column: the whole value
@@ -617,13 +651,16 @@ fn parameter_stores(query: Node, catalog: Catalog) -> List(Store) {
     node.items(conflict_entries),
   )
   |> list.filter_map(fn(entry) {
-    let value = stored_value(node.get_field(entry, "expr"), catalog)
+    let #(value, domains) =
+      stored_value(node.get_field(entry, "expr"), [], catalog)
     case is_external_parameter(value) {
       True ->
         Ok(Store(
           parameter: get_integer(value, "paramid"),
           relation:,
           column: get_integer(entry, "resno"),
+          domains: list.reverse(domains),
+          parameter_type: get_integer(value, "paramtype"),
         ))
       False -> Error(Nil)
     }
@@ -631,17 +668,31 @@ fn parameter_stores(query: Node, catalog: Catalog) -> List(Store) {
 }
 
 /// The value of a store without the nodes that keep NULL as NULL: the
-/// pass-through nodes, and a built-in length coercion.
-fn stored_value(expression: Node, catalog: Catalog) -> Node {
-  let is_pass_through = list.contains(pass_through, node.node_name(expression))
-  case is_pass_through, is_length_coercion(expression, catalog) {
-    True, _ -> stored_value(node.get_field(expression, "arg"), catalog)
+/// pass-through nodes, and a built-in length coercion. Also returns the
+/// domain types of the casts on the way (`COERCETODOMAIN`), innermost
+/// first: a domain can reject NULL.
+fn stored_value(
+  expression: Node,
+  domains: List(Int),
+  catalog: Catalog,
+) -> #(Node, List(Int)) {
+  let name = node.node_name(expression)
+  let domains = case name == "COERCETODOMAIN" {
+    True -> [get_integer(expression, "resulttype"), ..domains]
+    False -> domains
+  }
+  case
+    list.contains(pass_through, name),
+    is_length_coercion(expression, catalog)
+  {
+    True, _ -> stored_value(node.get_field(expression, "arg"), domains, catalog)
     False, True ->
       stored_value(
         node.get_item(node.get_field(expression, "args"), 0),
+        domains,
         catalog,
       )
-    False, False -> expression
+    False, False -> #(expression, domains)
   }
 }
 
@@ -702,6 +753,7 @@ fn decide_parameter(
   position: Int,
   stores: List(Store),
   occurrences: dict.Dict(Int, Int),
+  has_check_option: Bool,
   catalog: Catalog,
 ) -> ParameterRule {
   let own_stores =
@@ -712,7 +764,7 @@ fn decide_parameter(
     _, False -> ParameterRule(False, reason.AlsoUsedOutsideStore)
     _, True ->
       list.find_map(own_stores, fn(store) {
-        accepts_null(catalog, store.relation, store.column)
+        accepts_null(catalog, store, has_check_option)
         |> result_to_refusal
       })
       |> refusal_to_rule
@@ -736,31 +788,34 @@ fn result_to_refusal(
 }
 
 /// Whether storing NULL into the column can never fail because of a
-/// declared rule.
+/// declared rule. `has_check_option` is True when the statement writes
+/// through a view WITH CHECK OPTION.
 fn accepts_null(
   catalog: Catalog,
-  oid: Int,
-  column: Int,
+  store: Store,
+  has_check_option: Bool,
 ) -> Result(Nil, ParameterReason) {
   use relation <- result.try(
-    catalog.get_relation(catalog, oid)
+    catalog.get_relation(catalog, store.relation)
     |> result.replace_error(reason.StoreColumnNotFound),
   )
   use attribute <- result.try(
-    catalog.get_attribute(relation, column)
+    catalog.get_attribute(relation, store.column)
     |> result.replace_error(reason.StoreColumnNotFound),
   )
+  use Nil <- result.try(check_table_kind(relation))
   use <- bool.guard(
     when: attribute.not_null,
     return: Error(reason.ColumnIsNotNull),
   )
   use Nil <- result.try(check_domain(catalog, attribute))
+  use Nil <- result.try(check_cast_domains(catalog, store))
   use <- bool.guard(
-    when: list.contains(relation.check_columns, column),
+    when: names_column(relation.check_columns, store.column),
     return: Error(reason.CheckConstraint),
   )
   let family =
-    [oid, ..relation.descendants]
+    [store.relation, ..relation.descendants]
     |> list.filter_map(catalog.get_relation(catalog, _))
   use Nil <- result.try(
     list.try_each(family, check_family_member(_, attribute.name)),
@@ -773,7 +828,53 @@ fn accepts_null(
     when: list.any(family, fn(member) { member.has_row_security }),
     return: Error(reason.RowLevelSecurity),
   )
-  Ok(Nil)
+  refuse_when(has_check_option, reason.ViewCheckOption)
+}
+
+/// Only a table (`r`) or a partitioned table (`p`) enforces the rules that
+/// the catalog shows. A view that a statement writes has an INSTEAD OF
+/// trigger, and a foreign table leaves the rules to its server.
+fn check_table_kind(relation: Relation) -> Result(Nil, ParameterReason) {
+  case relation.kind {
+    "r" | "p" -> Ok(Nil)
+    kind -> Error(reason.RelationNotTable(kind))
+  }
+}
+
+/// A CHECK names a column when its list holds the column number, or 0,
+/// which stands for a whole-row reference or a CHECK without a column.
+fn names_column(columns: List(Int), column: Int) -> Bool {
+  list.contains(columns, column) || list.contains(columns, 0)
+}
+
+/// Each domain that the value is cast to, and the parameter's own type
+/// when it is a domain, must accept NULL. A cast domain whose facts are
+/// missing counts as NOT NULL. The catalog holds facts for every domain
+/// type of the query, so a parameter type without facts is not a domain.
+fn check_cast_domains(
+  catalog: Catalog,
+  store: Store,
+) -> Result(Nil, ParameterReason) {
+  use Nil <- result.try(
+    list.try_each(store.domains, fn(oid) {
+      catalog.get_domain(catalog, oid)
+      |> result.map(check_cast_domain_rules)
+      |> result.unwrap(Error(reason.CastToNotNullDomain))
+    }),
+  )
+  catalog.get_domain(catalog, store.parameter_type)
+  |> result.map(check_cast_domain_rules)
+  |> result.unwrap(Ok(Nil))
+}
+
+fn check_cast_domain_rules(
+  domain: catalog.Domain,
+) -> Result(Nil, ParameterReason) {
+  use <- bool.guard(
+    when: domain.not_null,
+    return: Error(reason.CastToNotNullDomain),
+  )
+  refuse_when(domain.has_check, reason.CastToDomainWithCheck)
 }
 
 /// A domain whose facts are missing counts as NOT NULL, so the parameter
@@ -800,11 +901,13 @@ fn refuse_when(refused: Bool, why: a) -> Result(Nil, a) {
   }
 }
 
-/// A child table or partition without the column has nothing to check.
+/// Each child table and partition must be a table. One without the
+/// column has nothing more to check.
 fn check_family_member(
   member: Relation,
   name: String,
 ) -> Result(Nil, ParameterReason) {
+  use Nil <- result.try(check_table_kind(member))
   catalog.get_attribute_by_name(member, name)
   |> result.map(check_member_column(member, _))
   |> result.unwrap(Ok(Nil))
@@ -818,9 +921,17 @@ fn check_member_column(
     when: attribute.not_null,
     return: Error(reason.PartitionNotNull),
   )
+  use <- bool.guard(
+    when: names_column(member.check_columns, attribute.number),
+    return: Error(reason.PartitionCheck),
+  )
+  use <- bool.guard(
+    when: names_column(member.partition_key_columns, attribute.number),
+    return: Error(reason.PartitionKey),
+  )
   refuse_when(
-    list.contains(member.check_columns, attribute.number),
-    reason.PartitionCheck,
+    list.contains(member.generated_sources, attribute.number),
+    reason.GeneratedColumnUsesIt,
   )
 }
 
@@ -831,13 +942,26 @@ fn collect(value: Node, found: CatalogOids) -> CatalogOids {
   list.fold(children(value), found, fn(found, child) { collect(child, found) })
 }
 
+/// A view that a query reads is a subquery range (`rtekind` 1) that keeps
+/// the view's `relid` on PostgreSQL 16 and newer. It is collected too, so
+/// that the schema fingerprint holds the view's definition.
 fn collect_oid(value: Node, found: CatalogOids) -> CatalogOids {
   let kind = node.text(node.get_field(value, "rtekind"))
+  let relation = get_integer(value, "relid")
   case node.node_name(value), kind {
     "RANGETBLENTRY", "0" ->
-      CatalogOids(..found, relations: [
-        get_integer(value, "relid"),
-        ..found.relations
+      CatalogOids(..found, relations: [relation, ..found.relations])
+    "RANGETBLENTRY", "1" if relation > 0 ->
+      CatalogOids(..found, relations: [relation, ..found.relations])
+    "PARAM", _ ->
+      CatalogOids(..found, types: [
+        get_integer(value, "paramtype"),
+        ..found.types
+      ])
+    "COERCETODOMAIN", _ ->
+      CatalogOids(..found, types: [
+        get_integer(value, "resulttype"),
+        ..found.types
       ])
     "AGGREF", _ ->
       CatalogOids(..found, functions: [

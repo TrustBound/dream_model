@@ -39,11 +39,22 @@ pub type Relation {
     /// Every child table and partition, at any depth.
     descendants: List(Int),
     /// The column numbers that a CHECK constraint of this relation names.
+    /// `0` stands for a CHECK with a whole-row reference or with no column,
+    /// which can reject NULL in any column.
     check_columns: List(Int),
+    /// The column numbers of the partition key of a partitioned table.
+    /// `0` stands for an expression in the key, which can use any column.
+    partition_key_columns: List(Int),
+    /// The column numbers that a generated column is computed from.
+    generated_sources: List(Int),
     /// The columns with a NOT NULL constraint that is NOT VALID
     /// (PostgreSQL 18 and newer).
     not_valid_not_null: List(String),
-    /// True when a BEFORE trigger (not an internal one) is on the relation.
+    /// True when a row-level BEFORE or INSTEAD OF trigger (not an internal
+    /// one) is on the relation: `tgtype` has the ROW bit (1) and the BEFORE
+    /// bit (2), or the ROW bit and the INSTEAD bit (64). A statement-level
+    /// trigger cannot see the values of a row. The schema fingerprint of
+    /// dream_postgres reads the same BEFORE ROW triggers (`tgtype & 3 = 3`).
     has_before_trigger: Bool,
     /// True when row-level security is on, or a policy has WITH CHECK.
     has_row_security: Bool,
@@ -98,17 +109,20 @@ pub fn version(catalog: Catalog) -> Int {
   catalog.version
 }
 
-/// Reads the facts for the relations and functions that the catalog does
-/// not hold yet, with every child table and partition of the relations,
-/// and the domains of their columns.
+/// Reads the facts for the relations, functions and types that the
+/// catalog does not hold yet, with every child table and partition of the
+/// relations, and the domains of their columns. Of `type_oids`, only the
+/// domain types get facts: `get_domain` gives `Error(Nil)` for any other
+/// type.
 pub fn load(
   catalog: Catalog,
   connection: wire.Connection,
   relation_oids: List(Int),
   function_oids: List(Int),
+  type_oids: List(Int),
 ) -> Result(Catalog, wire.WireError) {
   use catalog <- result.try(load_relations(catalog, connection, relation_oids))
-  use catalog <- result.try(load_domains(catalog, connection))
+  use catalog <- result.try(load_domains(catalog, connection, type_oids))
   load_functions(catalog, connection, function_oids)
 }
 
@@ -156,7 +170,8 @@ select root, oid from family"
 const relations_sql =
   "select c.oid, c.relkind,
   exists (select 1 from pg_catalog.pg_trigger t where t.tgrelid = c.oid
-    and not t.tgisinternal and (t.tgtype & 2) = 2),
+    and not t.tgisinternal
+    and ((t.tgtype & 3) = 3 or (t.tgtype & 65) = 65)),
   c.relrowsecurity or exists (select 1 from pg_catalog.pg_policy p
     where p.polrelid = c.oid and p.polwithcheck is not null),
   pg_catalog.quote_ident(n.nspname) || '.' || pg_catalog.quote_ident(c.relname)
@@ -170,10 +185,30 @@ const attributes_sql =
 from pg_catalog.pg_attribute a join pg_catalog.pg_type t on t.oid = a.atttypid
 where a.attrelid = any($1::oid[]) and a.attnum > 0 and not a.attisdropped"
 
+/// A CHECK with no column list gives the column number 0, like a whole-row
+/// reference does.
 const checks_sql =
   "select c.conrelid, k.attnum
-from pg_catalog.pg_constraint c, unnest(c.conkey) as k(attnum)
+from pg_catalog.pg_constraint c,
+  unnest(coalesce(nullif(c.conkey, '{}'), '{0}'::int2[])) as k(attnum)
 where c.conrelid = any($1::oid[]) and c.contype = 'c'"
+
+/// An expression in a partition key gives the column number 0.
+const partition_keys_sql =
+  "select p.partrelid, k.attnum
+from pg_catalog.pg_partitioned_table p,
+  unnest(p.partattrs::int2[]) as k(attnum)
+where p.partrelid = any($1::oid[])"
+
+/// The columns that a generated column depends on, from `pg_depend`.
+const generated_sources_sql =
+  "select d.adrelid, p.refobjsubid
+from pg_catalog.pg_attrdef d
+join pg_catalog.pg_attribute a on a.attrelid = d.adrelid and a.attnum = d.adnum
+join pg_catalog.pg_depend p on p.classid = 'pg_catalog.pg_attrdef'::pg_catalog.regclass
+  and p.objid = d.oid and p.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+  and p.refobjid = d.adrelid and p.refobjsubid > 0 and p.refobjsubid <> d.adnum
+where d.adrelid = any($1::oid[]) and a.attgenerated <> ''"
 
 const not_valid_sql =
   "select c.conrelid, a.attname
@@ -210,6 +245,14 @@ fn load_relations(
     query_by_oids(connection, checks_sql, new)
     |> result.try(decode_rows(_, decode_pair_of_integers)),
   )
+  use partition_keys <- result.try(
+    query_by_oids(connection, partition_keys_sql, new)
+    |> result.try(decode_rows(_, decode_pair_of_integers)),
+  )
+  use generated_sources <- result.try(
+    query_by_oids(connection, generated_sources_sql, new)
+    |> result.try(decode_rows(_, decode_pair_of_integers)),
+  )
   use not_valid <- result.try(load_not_valid(catalog, connection, new))
   let relations =
     list.fold(relations, catalog.relations, fn(relations, row) {
@@ -227,6 +270,8 @@ fn load_relations(
           descendants: values_for(pairs, oid)
             |> list.filter(fn(descendant) { descendant != oid }),
           check_columns: values_for(checks, oid),
+          partition_key_columns: values_for(partition_keys, oid),
+          generated_sources: values_for(generated_sources, oid) |> list.unique,
           not_valid_not_null: values_for(not_valid, oid),
           has_before_trigger:,
           has_row_security:,
@@ -263,7 +308,7 @@ fn values_for(pairs: List(#(Int, a)), key: Int) -> List(a) {
 const domains_sql =
   "with recursive chain(root, oid, not_null, base) as (
   select t.oid, t.oid, t.typnotnull, t.typbasetype from pg_catalog.pg_type t
-  where t.oid = any($1::oid[])
+  where t.oid = any($1::oid[]) and t.typtype = 'd'
   union all
   select c.root, t.oid, t.typnotnull, t.typbasetype from pg_catalog.pg_type t
   join chain c on t.oid = c.base where t.typtype = 'd')
@@ -275,12 +320,14 @@ from chain c group by c.root"
 fn load_domains(
   catalog: Catalog,
   connection: wire.Connection,
+  type_oids: List(Int),
 ) -> Result(Catalog, wire.WireError) {
   let missing =
     dict.values(catalog.relations)
     |> list.flat_map(fn(relation) { relation.attributes })
     |> list.filter(fn(attribute) { attribute.has_domain_type })
     |> list.map(fn(attribute) { attribute.type_oid })
+    |> list.append(type_oids)
     |> list.filter(fn(oid) { !dict.has_key(catalog.domains, oid) })
     |> list.unique
   use rows <- result.try(

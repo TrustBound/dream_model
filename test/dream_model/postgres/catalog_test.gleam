@@ -11,6 +11,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{Some}
 import gleam/result
+import gleam/string
 
 pub fn tests(version: Int) -> TestSuite {
   describe("dream_model/postgres/catalog", [
@@ -109,6 +110,57 @@ pub fn tests(version: Int) -> TestSuite {
       Ok(Domain(not_null: True, has_check: False)),
     ),
     catalog_case(
+      "get_domain returns an error for a loaded type that is not a domain",
+      version,
+      fn(catalog, _oids) { catalog.get_domain(catalog, 25) },
+      Error(Nil),
+    ),
+    catalog_case(
+      "a whole-row CHECK and a CHECK without a column give the column 0",
+      version,
+      fn(catalog, oids) {
+        ["whole_checked", "free_checked"]
+        |> list.map(fn(name) {
+          catalog.get_relation(catalog, oid_of(oids, name))
+          |> result.map(fn(relation) { relation.check_columns })
+        })
+      },
+      [Ok([0]), Ok([0])],
+    ),
+    catalog_case(
+      "a partitioned table holds its key columns, 0 for an expression",
+      version,
+      fn(catalog, oids) {
+        ["keyed", "keyed_expression", "users"]
+        |> list.map(fn(name) {
+          catalog.get_relation(catalog, oid_of(oids, name))
+          |> result.map(fn(relation) { relation.partition_key_columns })
+        })
+      },
+      [Ok([2]), Ok([0]), Ok([])],
+    ),
+    catalog_case(
+      "a relation holds the columns that its generated columns use",
+      version,
+      fn(catalog, oids) {
+        catalog.get_relation(catalog, oid_of(oids, "gen_from"))
+        |> result.map(fn(relation) { relation.generated_sources })
+      },
+      Ok([2]),
+    ),
+    catalog_case(
+      "only row-level BEFORE and INSTEAD OF triggers count",
+      version,
+      fn(catalog, oids) {
+        ["statement_triggered", "after_triggered", "iot_view"]
+        |> list.map(fn(name) {
+          catalog.get_relation(catalog, oid_of(oids, name))
+          |> result.map(fn(relation) { relation.has_before_trigger })
+        })
+      },
+      [Ok(False), Ok(False), Ok(True)],
+    ),
+    catalog_case(
       "get_function returns the name and schema of a function",
       version,
       fn(catalog, _oids) { catalog.get_function(catalog, 2803) },
@@ -145,6 +197,14 @@ const names = [
   #("dogs", "dogs"),
   #("checked", "checked"),
   #("secured", "secured"),
+  #("keyed", "keyed"),
+  #("keyed_expression", "keyed_expression"),
+  #("whole_checked", "whole_checked"),
+  #("free_checked", "free_checked"),
+  #("gen_from", "gen_from"),
+  #("statement_triggered", "statement_triggered"),
+  #("after_triggered", "after_triggered"),
+  #("iot_view", "iot_view"),
 ]
 
 fn oid_of(oids: List(#(String, Int)), name: String) -> Int {
@@ -167,9 +227,11 @@ fn catalog_case(
 
     // Act
     let assert Ok(loaded) =
-      catalog.load(catalog.new(version), connection, relations, [2803, 669])
+      catalog.load(catalog.new(version), connection, relations, [2803, 669], [
+        25,
+      ])
     let assert Ok(loaded) =
-      catalog.load(loaded, connection, relations, [2803, 669])
+      catalog.load(loaded, connection, relations, [2803, 669], [])
     let _ = wire.close(connection)
 
     // Assert
@@ -184,7 +246,10 @@ fn read_oids(connection: wire.Connection) -> List(#(String, Int)) {
   let assert Ok(rows) =
     wire.simple_query(
       connection,
-      "select relname, oid from pg_class where relname in ('users', 'contacts', 'animals', 'dogs', 'checked', 'secured') union all select 'strict_text', 'strict_text'::regtype::oid",
+      "select relname, oid from pg_class where relname in ("
+        <> list.map(names, fn(pair) { "'" <> pair.0 <> "'" })
+      |> string.join(", ")
+        <> ") union all select 'strict_text', 'strict_text'::regtype::oid",
     )
   list.filter_map(rows, fn(row) {
     case row {

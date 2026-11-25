@@ -64,7 +64,7 @@ pub fn tests(version: Int) -> TestSuite {
           wire.simple_query(connection, "select 'users'::regclass::oid")
         let oid = int.parse(oid) |> result.unwrap(0)
         let assert Ok(loaded) =
-          catalog.load(catalog.new(version), connection, [oid], [])
+          catalog.load(catalog.new(version), connection, [oid], [], [])
         let _ = wire.close(connection)
         let query =
           parse(
@@ -84,25 +84,34 @@ pub fn tests(version: Int) -> TestSuite {
       }),
     ]),
     group("collect_catalog_oids", [
-      it("collects relations, aggregates and operator functions once", fn() {
-        // Arrange
-        let query =
-          parse(
-            "{QUERY :rtable ({RANGETBLENTRY :rtekind 0 :relid 10} {RANGETBLENTRY :rtekind 1 :relid 11} {RANGETBLENTRY :rtekind 0 :relid 10}) :targetList ({AGGREF :aggfnoid 2803} {DISTINCTEXPR :opfuncid 67})}",
+      it(
+        "collects relations, views, aggregates, operator functions and types once",
+        fn() {
+          // Arrange
+          let query =
+            parse(
+              "{QUERY :rtable ({RANGETBLENTRY :rtekind 0 :relid 10} {RANGETBLENTRY :rtekind 1 :relid 11} {RANGETBLENTRY :rtekind 1 :relid 0} {RANGETBLENTRY :rtekind 0 :relid 10}) :targetList ({AGGREF :aggfnoid 2803} {DISTINCTEXPR :opfuncid 67} {COERCETODOMAIN :arg {PARAM :paramkind 0 :paramid 1 :paramtype 25} :resulttype 9000})}",
+            )
+
+          // Act
+          let oids = rules.collect_catalog_oids(query)
+
+          // Assert
+          CatalogOids(
+            relations: list.sort(oids.relations, int.compare),
+            functions: list.sort(oids.functions, int.compare),
+            types: list.sort(oids.types, int.compare),
           )
-
-        // Act
-        let oids = rules.collect_catalog_oids(query)
-
-        // Assert
-        CatalogOids(
-          relations: list.sort(oids.relations, int.compare),
-          functions: list.sort(oids.functions, int.compare),
-        )
-        |> should
-        |> be_equal(CatalogOids(relations: [10], functions: [67, 2803]))
-        |> or_fail_with("Expected the oids")
-      }),
+          |> should
+          |> be_equal(
+            CatalogOids(relations: [10, 11], functions: [67, 2803], types: [
+              25,
+              9000,
+            ]),
+          )
+          |> or_fail_with("Expected the oids")
+        },
+      ),
     ]),
   ])
 }
