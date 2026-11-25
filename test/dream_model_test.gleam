@@ -4,9 +4,12 @@
 //// that `DREAM_MODEL_TEST_VERSIONS` picks; the run stops with one message
 //// when that fails.
 
+import dream_model/generator/fingerprint_test
 import dream_model/generator/gleam_type_test
+import dream_model/generator/model_test
 import dream_model/generator/name_test
 import dream_model/generator/query_hint_test
+import dream_model/generator/query_test
 import dream_model/nullability/attack_test
 import dream_model/nullability/hint_test
 import dream_model/nullability/reason_test
@@ -76,6 +79,9 @@ fn run_tests(versions: List(Int)) -> Nil {
         attack_test.tests(version),
         gleam_type_test.tests(version),
         parameter_column_test.tests(version),
+        query_test.tests(version),
+        fingerprint_test.tests(version),
+        model_test.tests(version),
       ]
     })
   runner.new(list.append(unit_suites, version_suites))

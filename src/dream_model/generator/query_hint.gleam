@@ -117,6 +117,14 @@ pub fn type_name_to_string(type_name: TypeName) -> String {
   }
 }
 
+/// Returns the name of a type without its module, for example `User`.
+pub fn base_name(type_name: TypeName) -> String {
+  case type_name {
+    LocalType(name) -> name
+    ModuleType(name:, ..) -> name
+  }
+}
+
 /// Returns the word of a returns form, as in the hint.
 pub fn returns_to_string(returns: Returns) -> String {
   case returns {
