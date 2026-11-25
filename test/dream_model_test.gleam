@@ -14,6 +14,7 @@ import dream_model/nullability/rules_test
 import dream_model/nullability_test
 import dream_model/postgres/catalog_test
 import dream_model/postgres/node_test
+import dream_model/postgres/parameter_column_test
 import dream_model/postgres/scram_test
 import dream_model/postgres/tree_test
 import dream_model/postgres/wire_test
@@ -74,6 +75,7 @@ fn run_tests(versions: List(Int)) -> Nil {
         rules_test.tests(version),
         attack_test.tests(version),
         gleam_type_test.tests(version),
+        parameter_column_test.tests(version),
       ]
     })
   runner.new(list.append(unit_suites, version_suites))

@@ -20,6 +20,7 @@ import dream_model/nullability/reason.{
 }
 import dream_model/nullability/rules
 import dream_model/postgres/catalog.{type Catalog}
+import dream_model/postgres/parameter_column
 import dream_model/postgres/tree
 import dream_model/postgres/wire
 import gleam/bool
@@ -47,12 +48,35 @@ pub type Parameter {
     type_oid: Int,
     optional: Bool,
     reason: ParameterReason,
+    /// The table columns that the parameter is stored into or compared
+    /// with, in the order of the tree, without duplicates.
+    columns: List(TableColumn),
+  )
+}
+
+/// A column of a table, by name.
+pub type TableColumn {
+  TableColumn(
+    /// The schema and the name of the table, quoted as `quote_ident`
+    /// does, for example `public.users`.
+    table: String,
+    column: String,
   )
 }
 
 /// What `analyze` decides for one statement.
 pub type Analysis {
-  Analysis(columns: List(Column), parameters: List(Parameter))
+  Analysis(
+    columns: List(Column),
+    parameters: List(Parameter),
+    /// Every relation whose catalog facts the analysis read: each table or
+    /// view of the statement, with every child table and partition, as
+    /// `TableColumn.table` writes it, sorted.
+    relations: List(String),
+    /// The tables that the statement writes (INSERT, UPDATE, DELETE,
+    /// MERGE, also in a CTE), sorted.
+    written_relations: List(String),
+  )
 }
 
 /// A hint that dream_model refuses.
@@ -189,6 +213,7 @@ pub fn analyze(
       )
     })
   use columns <- result.try(apply_hints(columns, hints))
+  let uses = parameter_column.find_uses(query)
   let parameters =
     rules.decide_parameters(
       query,
@@ -204,11 +229,25 @@ pub fn analyze(
           type_oid:,
           optional: rule.optional,
           reason: rule.reason,
+          columns: name_parameter_columns(uses, index + 1, catalog),
         ),
         hints,
       )
     })
-  Ok(#(Analysis(columns:, parameters:), analyzer))
+  let relations =
+    list.flat_map(oids.relations, fn(oid) {
+      catalog.get_relation(catalog, oid)
+      |> result.map(fn(relation) { [oid, ..relation.descendants] })
+      |> result.unwrap([])
+    })
+    |> relation_names(catalog)
+  let written_relations =
+    parameter_column.find_written_relations(query)
+    |> relation_names(catalog)
+  Ok(#(
+    Analysis(columns:, parameters:, relations:, written_relations:),
+    analyzer,
+  ))
 }
 
 /// Runs one statement on the catalog connection, with each parameter as
@@ -222,6 +261,32 @@ pub fn execute(
 ) -> Result(List(List(Option(String))), AnalysisError) {
   wire.execute(analyzer.catalog_connection, sql, parameters)
   |> result.map_error(DatabaseFailed)
+}
+
+fn name_parameter_columns(
+  uses: List(parameter_column.ParameterUse),
+  position: Int,
+  catalog: Catalog,
+) -> List(TableColumn) {
+  list.filter(uses, fn(found) { found.parameter == position })
+  |> list.filter_map(fn(found) { name_table_column(found.column, catalog) })
+  |> list.unique
+}
+
+fn name_table_column(
+  column: parameter_column.TableColumn,
+  catalog: Catalog,
+) -> Result(TableColumn, Nil) {
+  use relation <- result.try(catalog.get_relation(catalog, column.relation))
+  use attribute <- result.map(catalog.get_attribute(relation, column.column))
+  TableColumn(table: relation.name, column: attribute.name)
+}
+
+fn relation_names(oids: List(Int), catalog: Catalog) -> List(String) {
+  list.filter_map(oids, catalog.get_relation(catalog, _))
+  |> list.map(fn(relation) { relation.name })
+  |> list.unique
+  |> list.sort(string.compare)
 }
 
 /// Checks one row of results against the `-- not null:` hints, the same
