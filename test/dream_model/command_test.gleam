@@ -12,6 +12,7 @@ import dream_test/unit.{describe, group, it}
 import fixtures/model_database
 import fixtures/servers
 import gleam/erlang/process
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
@@ -24,25 +25,33 @@ const plain_toml = "name = \"app\"\nversion = \"1.0.0\"\n"
 
 const count_sql = "-- returns: one\nselect count(*) as total from users\n"
 
-pub fn tests(version: Int) -> TestSuite {
+/// The tests that need no database: they run once, not once per version.
+pub fn unit_tests() -> TestSuite {
   describe("dream_model/command", [
     arguments_tests(),
     config_tests(),
     folder_tests(),
+    main_tests(),
+  ])
+}
+
+/// The tests that run the generator against the database of a version.
+pub fn tests(version: Int) -> TestSuite {
+  describe("dream_model/command", [
     run_failure_tests(version),
     run_tests(version),
-    main_tests(),
   ])
 }
 
 /// Writes a project with a gleam.toml and files, each as `#(path, text)`,
 /// and returns its folder.
 fn make_project(
+  scope: String,
   name: String,
   toml: String,
   files: List(#(String, String)),
 ) -> String {
-  let directory = root <> "/" <> name
+  let directory = root <> "/" <> scope <> "/" <> name
   let _ = simplifile.delete(directory)
   let assert Ok(Nil) = simplifile.create_directory_all(directory)
   let assert Ok(Nil) = simplifile.write(directory <> "/gleam.toml", toml)
@@ -172,7 +181,7 @@ fn config_tests() {
       it(title, fn() {
         // Arrange
         let directory =
-          make_project("config_" <> string.inspect(index), toml, [])
+          make_project("unit", "config_" <> string.inspect(index), toml, [])
 
         // Act
         let config = command.read_config(directory)
@@ -206,7 +215,7 @@ fn folder_tests() {
     it("finds every folder with a .sql file, sorted", fn() {
       // Arrange
       let directory =
-        make_project("folders_found", plain_toml, [
+        make_project("unit", "folders_found", plain_toml, [
           #("src/app/models/user/find.sql", "select 1"),
           #("src/app/models/user/list.sql", "select 1"),
           #("src/app/models/post/list.sql", "select 1"),
@@ -226,7 +235,7 @@ fn folder_tests() {
     it("refuses a folder that is not a module path", fn() {
       // Arrange
       let directory =
-        make_project("folders_refused", plain_toml, [
+        make_project("unit", "folders_refused", plain_toml, [
           #("src/App/find.sql", "select 1"),
           #("src/top.sql", "select 1"),
         ])
@@ -246,7 +255,7 @@ fn folder_tests() {
     it("uses the models of the config", fn() {
       // Arrange
       let directory =
-        make_project("folders_config", plain_toml, [
+        make_project("unit", "folders_config", plain_toml, [
           #("src/app/models/user/find.sql", "select 1"),
           #("src/app/models/post/list.sql", "select 1"),
         ])
@@ -267,7 +276,7 @@ fn folder_tests() {
     it("refuses a configured folder without .sql files", fn() {
       // Arrange
       let directory =
-        make_project("folders_missing", plain_toml, [
+        make_project("unit", "folders_missing", plain_toml, [
           #("src/app/models/user/find.sql", "select 1"),
         ])
 
@@ -288,7 +297,7 @@ fn folder_tests() {
     }),
     it("refuses a project without src", fn() {
       // Arrange
-      let directory = make_project("folders_no_src", plain_toml, [])
+      let directory = make_project("unit", "folders_no_src", plain_toml, [])
 
       // Act
       let folders =
@@ -316,13 +325,14 @@ fn folder_tests() {
 }
 
 fn run_failure_tests(version: Int) {
+  let scope = int.to_string(version)
   let url = model_database.url(version)
   let user_files = [#("src/app/models/user/count.sql", count_sql)]
   let cases = [
     #(
       "stops on unknown arguments",
       ["--force"],
-      fn() { make_project("run_arguments", plain_toml, user_files) },
+      fn() { make_project(scope, "run_arguments", plain_toml, user_files) },
       environment(url),
       Outcome(
         1,
@@ -332,7 +342,9 @@ fn run_failure_tests(version: Int) {
     #(
       "says so when there is nothing to generate",
       [],
-      fn() { make_project("run_nothing", plain_toml, [#("src/app.gleam", "")]) },
+      fn() {
+        make_project(scope, "run_nothing", plain_toml, [#("src/app.gleam", "")])
+      },
       environment(url),
       Outcome(
         0,
@@ -342,7 +354,7 @@ fn run_failure_tests(version: Int) {
     #(
       "needs the database URL variable",
       [],
-      fn() { make_project("run_no_url", plain_toml, user_files) },
+      fn() { make_project(scope, "run_no_url", plain_toml, user_files) },
       no_environment,
       Outcome(
         1,
@@ -352,7 +364,7 @@ fn run_failure_tests(version: Int) {
     #(
       "stops when the database is not reachable",
       [],
-      fn() { make_project("run_unreachable", plain_toml, user_files) },
+      fn() { make_project(scope, "run_unreachable", plain_toml, user_files) },
       environment("postgresql://dream:dream@127.0.0.1:1/dream_test"),
       Outcome(
         1,
@@ -363,7 +375,7 @@ fn run_failure_tests(version: Int) {
       "lists every refused file",
       [],
       fn() {
-        make_project("run_refused", plain_toml, [
+        make_project(scope, "run_refused", plain_toml, [
           #("src/app/models/user/bad.sql", "-- returns: all\nselect 1"),
           #("src/app/models/user/worse.sql", "select nope from users"),
           #("src/app/models/user/folder.sql/x", ""),
@@ -379,7 +391,7 @@ fn run_failure_tests(version: Int) {
       "stops on a type that differs between files",
       [],
       fn() {
-        make_project("run_types", plain_toml, [
+        make_project(scope, "run_types", plain_toml, [
           #(
             "src/app/models/user/find.sql",
             "-- returns: one User\nselect id, email from users where id = $1",
@@ -400,7 +412,7 @@ fn run_failure_tests(version: Int) {
       "stops on a name that the module uses",
       [],
       fn() {
-        make_project("run_names", plain_toml, [
+        make_project(scope, "run_names", plain_toml, [
           #("src/app/models/user/one_row.sql", count_sql),
         ])
       },
@@ -415,6 +427,7 @@ fn run_failure_tests(version: Int) {
       [],
       fn() {
         make_project(
+          scope,
           "run_no_build",
           plain_toml,
           list.append(user_files, [#("build/dream_model", "")]),
@@ -431,6 +444,7 @@ fn run_failure_tests(version: Int) {
       [],
       fn() {
         make_project(
+          scope,
           "run_no_write",
           plain_toml,
           list.append(user_files, [#("src/app/models/user.gleam/x", "")]),
@@ -476,7 +490,7 @@ fn run_failure_tests(version: Int) {
       |> list.append([
         it("stops on a server version older than 16", fn() {
           // Arrange
-          let directory = make_project("run_old", plain_toml, user_files)
+          let directory = make_project(scope, "run_old", plain_toml, user_files)
 
           // Act
           let outcome =
@@ -503,12 +517,13 @@ fn run_failure_tests(version: Int) {
 }
 
 fn run_tests(version: Int) {
+  let scope = int.to_string(version)
   let url = model_database.url(version)
   group("run", [
     it("writes a module and says so", fn() {
       // Arrange
       let directory =
-        make_project("run_write", plain_toml, [
+        make_project(scope, "run_write", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
         ])
 
@@ -524,7 +539,7 @@ fn run_tests(version: Int) {
     it("writes a module that gleam format leaves as it is", fn() {
       // Arrange
       let directory =
-        make_project("run_formatted", plain_toml, [
+        make_project(scope, "run_formatted", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
         ])
       let _ = command.run([], directory, environment(url))
@@ -544,7 +559,7 @@ fn run_tests(version: Int) {
     it("says unchanged for a module that is up to date", fn() {
       // Arrange
       let directory =
-        make_project("run_unchanged", plain_toml, [
+        make_project(scope, "run_unchanged", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
         ])
       let _ = command.run([], directory, environment(url))
@@ -561,7 +576,7 @@ fn run_tests(version: Int) {
     it("--check passes when every module matches", fn() {
       // Arrange
       let directory =
-        make_project("check_match", plain_toml, [
+        make_project(scope, "check_match", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
         ])
       let _ = command.run([], directory, environment(url))
@@ -581,7 +596,7 @@ fn run_tests(version: Int) {
     it("--check lists a module whose folder lost its .sql files", fn() {
       // Arrange
       let directory =
-        make_project("check_stale_folder", plain_toml, [
+        make_project(scope, "check_stale_folder", plain_toml, [
           #("src/app/models/old.gleam", old_module),
           #("src/app/web.gleam", "pub fn main() { Nil }\n"),
         ])
@@ -601,7 +616,7 @@ fn run_tests(version: Int) {
     it("removes a module whose folder lost its .sql files", fn() {
       // Arrange
       let directory =
-        make_project("run_stale_folder", plain_toml, [
+        make_project(scope, "run_stale_folder", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
           #("src/app/models/old.gleam", old_module),
           #("src/app/models/keep.gleam", "pub fn keep() { 1 }\n"),
@@ -630,7 +645,7 @@ fn run_tests(version: Int) {
     it("removes a stale module when no folder has .sql files", fn() {
       // Arrange
       let directory =
-        make_project("run_only_stale", plain_toml, [
+        make_project(scope, "run_only_stale", plain_toml, [
           #("src/app/models/old.gleam", old_module),
         ])
 
@@ -646,7 +661,7 @@ fn run_tests(version: Int) {
     it("says why it cannot remove a stale module", fn() {
       // Arrange
       let directory =
-        make_project("run_stale_locked", plain_toml, [
+        make_project(scope, "run_stale_locked", plain_toml, [
           #("src/app/models/old.gleam", old_module),
         ])
       let folder = directory <> "/src/app/models"
@@ -668,7 +683,7 @@ fn run_tests(version: Int) {
     it("never overwrites a file without the generated header", fn() {
       // Arrange
       let directory =
-        make_project("run_foreign_file", plain_toml, [
+        make_project(scope, "run_foreign_file", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
           #("src/app/models/user.gleam", "pub fn mine() { 1 }\n"),
         ])
@@ -730,7 +745,7 @@ fn run_tests(version: Int) {
     it("--check and the fingerprint see a changed view definition", fn() {
       // Arrange
       let directory =
-        make_project("check_view_definition", plain_toml, [
+        make_project(scope, "check_view_definition", plain_toml, [
           #(
             "src/app/models/author/titles.sql",
             "-- returns: many\nselect title from post_authors\n",
@@ -785,7 +800,7 @@ fn run_tests(version: Int) {
     it("--check lists a missing and a changed module and writes nothing", fn() {
       // Arrange
       let directory =
-        make_project("check_stale", plain_toml, [
+        make_project(scope, "check_stale", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
           #("src/app/models/post/count.sql", count_sql),
           #("src/app/models/user.gleam", "// old\n"),
@@ -859,7 +874,9 @@ fn main_tests() {
       // Arrange
       let halted = process.new_subject()
       let directory =
-        make_project("main_nothing", plain_toml, [#("src/app.gleam", "")])
+        make_project("unit", "main_nothing", plain_toml, [
+          #("src/app.gleam", ""),
+        ])
 
       // Act
       command.main([], directory, no_environment, process.send(halted, _))

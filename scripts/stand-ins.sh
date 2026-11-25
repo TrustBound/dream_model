@@ -103,8 +103,9 @@ copy_dream() {
 copy_dream_postgres "$root/build/packages"
 echo "Copied dream_postgres and its packages into build/packages"
 
-# The end-to-end app. The tests copy it to build/e2e/model_app and build it
-# there, so its packages go there too.
+# The end-to-end app. The tests copy it, with the build folder of
+# build/e2e/model_app, to build/e2e/<version>/model_app and build it there,
+# so its packages go into build/e2e/model_app/build.
 e2e_packages="$root/build/e2e/model_app/build/packages"
 for name in gleam_stdlib gleam_erlang gleam_otp gleam_json gleam_time simplifile filepath tom; do
   copy_package "$root/build/packages/$name" "$e2e_packages" "$name"

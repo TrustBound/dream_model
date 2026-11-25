@@ -4,54 +4,106 @@
 # rule off (or widens it) in a copy of the repository and requires the
 # tests to fail.
 #
-# The script copies the repository to a temporary folder once. For each
-# mutant it restores the original source, applies the mutant's change to
-# one file (an exact text replacement), and runs `gleam test` on the
-# PostgreSQL version that the rule is about. A mutant that the tests do not
-# kill survives. The script prints a table of rule, version and failing
-# test counts, and exits with status 1 when a mutant survives or when a
-# mutant's text is no longer in the source.
+# Each mutant is an exact text replacement in one source file, the
+# PostgreSQL versions that it runs on, and the test files that kill it.
 #
-# The tests need the PostgreSQL servers (`make db-up`), the sqlc corpus
-# (`sh scripts/fetch-corpus.sh`) and the packages of the end-to-end app
-# (`sh scripts/stand-ins.sh`). The copy uses its own attack database,
-# dream_model_attack_mutation, but the same model, end-to-end, fuzz and
-# corpus databases as the repository: do not run `gleam test` in the
-# repository at the same time. The temporary folder is removed on exit.
+# How a mutant runs:
 #
-# Each mutant names the test files that kill it. The script records the
-# result of each mutant in scripts/mutation-results.tsv, with the commit it
-# ran on and a SHA-256 hash of the files it depends on: the source file
-# that it changes and its test files. A later run skips a mutant whose
-# recorded result is "killed" and whose hash still matches. --all runs
-# every mutant. The nightly workflow uses --all. Commit the results file
-# after a run. Its columns, divided by tabs: the mutant, the version, the
-# hash, the commit (with "+changes" when src or test had uncommitted
-# changes), the result, the number of failed tests, and a note.
+# 1. A worker applies the change to its own copy of the repository and
+#    compiles the copy once. The versions of the mutant use that build.
+# 2. On each version, the test modules of the mutant run first
+#    (DREAM_MODEL_TEST_MODULES), with no coverage. When they kill the
+#    mutant, the mutant is killed. dream_test cannot stop a run at its
+#    first failure, so the short list of modules is what keeps a run short.
+# 3. When the mutant's own modules pass, every test runs on that version.
+#    When that kills the mutant, its list of test files is too narrow: the
+#    script prints a warning with the test modules that killed it. Add them
+#    to the mutant.
+# 4. The worker puts the original file back before its next mutant.
 #
-# Usage: sh scripts/mutation-test.sh [--all] [pattern]
+# --jobs N runs N workers at the same time (default 3). Each worker has its
+# own copy, made once, and its own databases on the shared servers: the
+# prefix "<MUTATION_DATABASE_PREFIX>w<N>_" goes before the name of each
+# database that its tests create (DREAM_MODEL_TEST_DATABASE_PREFIX). The
+# default of MUTATION_DATABASE_PREFIX is "mutation_". The script refuses to
+# start when two workers could make a database with the same name. Before
+# the first mutant, a run of every test without a mutant must pass. At the
+# end, and when the script is stopped, it stops the workers, drops the
+# databases of each worker and removes the copies.
+#
+# The tests need the PostgreSQL servers (`make db-up`), psql, the sqlc
+# corpus (`sh scripts/fetch-corpus.sh`) and the packages of the end-to-end
+# app (`sh scripts/stand-ins.sh`).
+#
+# The results are in scripts/mutation-results.tsv, with the commit that a
+# mutant ran on and a SHA-256 hash of what it depends on: the text of the
+# function (or constant or type) that the change is in, and the test files
+# of the mutant. A change elsewhere in the source file does not change the
+# hash. A later run skips a mutant whose recorded result is "killed" and
+# whose hash still matches. --all runs every mutant. The nightly workflow
+# uses --all. Commit the results file after a run. Its columns, divided by
+# tabs: the mutant, the version, the hash, the commit (with "+changes" when
+# src or test had uncommitted changes), the result, the number of failed
+# tests, and a note: "own modules" when the mutant's own test modules
+# killed it, or "all tests" when only the run of every test did.
+#
+# A run that fails with "No space left on device" is recorded as "error",
+# never as "killed".
+#
+# --own-modules-only runs only the test modules of each mutant, also for
+# the baseline, and never every test. Use it when the servers are short of
+# disk: a mutant that its own modules do not kill is then recorded as
+# "survived" with the note "own modules only".
+#
+# Usage: sh scripts/mutation-test.sh [--all] [--own-modules-only] [--jobs N] [pattern]
 #   With a pattern, only the mutants whose name contains it run.
 set -eu
 
 cd "$(dirname "$0")/.."
 root=$(pwd)
 run_all=false
-if [ "${1:-}" = "--all" ]; then
-  run_all=true
+own_only=false
+jobs=3
+filter=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --all) run_all=true ;;
+    --own-modules-only) own_only=true ;;
+    --jobs)
+      jobs="${2:-}"
+      shift
+      ;;
+    --jobs=*) jobs="${1#--jobs=}" ;;
+    *) filter="$1" ;;
+  esac
   shift
-fi
-filter="${1:-}"
+done
+case "$jobs" in
+  '' | *[!0-9]* | 0)
+    echo "--jobs needs a number of workers, 1 or more"
+    exit 1
+    ;;
+esac
+prefix_base="${MUTATION_DATABASE_PREFIX:-mutation_}"
+case "$prefix_base" in
+  '' | *[!a-z0-9_]*)
+    echo "MUTATION_DATABASE_PREFIX must be lowercase letters, digits and _, and not empty"
+    exit 1
+    ;;
+esac
 results="$root/scripts/mutation-results.tsv"
 commit=$(git rev-parse --short HEAD)
 if [ -n "$(git status --porcelain -- src test)" ]; then
   commit="$commit+changes"
 fi
 touch "$results"
+all_versions="16 17 18 19"
 rules="src/dream_model/nullability/rules.gleam"
 generator_query="src/dream_model/generator/query.gleam"
 gleam_type="src/dream_model/generator/gleam_type.gleam"
 catalog="src/dream_model/postgres/catalog.gleam"
 hint="src/dream_model/nullability/hint.gleam"
+query_hint="src/dream_model/generator/query_hint.gleam"
 model="src/dream_model/generator/model.gleam"
 command="src/dream_model/command.gleam"
 wire="src/dream_model/postgres/wire.gleam"
@@ -67,26 +119,78 @@ if [ ! -f build/e2e/model_app/build/packages/packages.toml ]; then
   echo "the end-to-end app has no packages: run sh scripts/stand-ins.sh first"
   exit 1
 fi
+if ! command -v psql > /dev/null; then
+  echo "psql is not installed: the script drops the databases of its workers with it"
+  exit 1
+fi
+
+# The prefix of the databases of each worker. No prefix may be the start of
+# another one, or two workers could make a database with the same name.
+worker_prefixes=""
+worker=1
+while [ "$worker" -le "$jobs" ]; do
+  worker_prefixes="$worker_prefixes ${prefix_base}w${worker}_"
+  worker=$((worker + 1))
+done
+for one in $worker_prefixes; do
+  for other in $worker_prefixes; do
+    if [ "$one" != "$other" ]; then
+      case "$other" in
+        "$one"*)
+          echo "The workers would share databases: $one is the start of $other"
+          exit 1
+          ;;
+      esac
+    fi
+  done
+done
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT INT TERM
+worker_pids=""
 
-copy="$work/repository"
-mkdir -p "$copy/build"
-for item in gleam.toml manifest.toml src test scripts docs e2e; do
-  cp -R "$item" "$copy/$item"
-done
-cp -R build/packages "$copy/build/packages"
-cp -R build/corpus "$copy/build/corpus"
-mkdir -p "$copy/build/e2e/model_app"
-cp -R build/e2e/model_app/build "$copy/build/e2e/model_app/build"
-mkdir -p "$work/original"
+# Stops a process and every process that it started.
+stop_tree() {
+  for child in $(pgrep -P "$1" 2> /dev/null || true); do
+    stop_tree "$child"
+  done
+  kill "$1" 2> /dev/null || true
+}
+
+# Drops the databases of each worker on each server that answers.
+drop_worker_databases() {
+  for prefix in $worker_prefixes; do
+    drop_databases "$prefix"
+  done
+}
+
+# Drops the databases whose name starts with a prefix on each server that
+# answers.
+drop_databases() {
+  for version in $all_versions; do
+    names=$(PGPASSWORD=dream psql -h localhost -p "$((5400 + version))" -U dream \
+      -d dream_test -Atc "select datname from pg_database where left(datname, ${#1}) = '$1'" \
+      2> /dev/null || true)
+    for name in $names; do
+      PGPASSWORD=dream psql -h localhost -p "$((5400 + version))" -U dream -d dream_test \
+        -qc "drop database if exists \"$name\" with (force)" > /dev/null 2>&1 || true
+    done
+  done
+}
+
+clean_up() {
+  trap - EXIT INT TERM
+  for pid in $worker_pids; do
+    stop_tree "$pid"
+  done
+  wait 2> /dev/null || true
+  drop_worker_databases
+  rm -rf "$work"
+}
+trap clean_up EXIT
+trap 'exit 130' INT TERM
+
+mkdir -p "$work/original" "$work/mutants" "$work/claims" "$work/rows"
 cp -R src "$work/original/src"
-
-# The copy has its own attack database, so that it never drops the one of
-# a test run in the repository.
-sed 's/"dream_model_attack"/"dream_model_attack_mutation"/' \
-  test/fixtures/attack_database.gleam > "$copy/test/fixtures/attack_database.gleam"
 
 # Replaces the first exact occurrence of SEARCH with REPLACE in a file.
 # Exits with status 3 when SEARCH is not in the file.
@@ -106,47 +210,41 @@ replace_text() {
   ' "$1"
 }
 
-# Runs the tests of the copy on one version. Prints the counts:
-# "failed fuzz corpus", or "none" when the run printed no summary (the
-# build failed).
-run_tests() {
-  log="$work/test.log"
-  set +e
-  (cd "$copy" && DREAM_MODEL_TEST_VERSIONS="$1" gleam test) > "$log" 2>&1
-  set -e
-  summary=$(grep -E '^Summary: ' "$log" | tail -n 1)
-  if [ -z "$summary" ]; then
-    echo "none"
-    return
-  fi
-  failed=$(echo "$summary" | sed -E 's/.* ([0-9]+) failed.*/\1/')
-  failures=$(sed -n '/^Failures:/,/^Summary:/p' "$log")
-  fuzz=$(echo "$failures" | grep -c '✗ seed ' || true)
-  corpus=$(echo "$failures" | grep -c '✗ finds no wrong never-NULL' || true)
-  echo "$failed $fuzz $corpus"
+# Prints the top-level item (function, constant or type) of a file that
+# holds the first occurrence of SEARCH: from its first line to the line
+# before the next top-level item, without the doc comments and attributes
+# of that next item. Exits with status 3 when SEARCH is not in the file.
+item_text() {
+  SEARCH="$2" perl -e '
+    my $file = shift;
+    open(my $in, "<", $file) or die "cannot read $file";
+    local $/;
+    my $text = <$in>;
+    close($in);
+    my $at = index($text, $ENV{SEARCH});
+    exit 3 if $at < 0;
+    my ($start, $end) = (0, length($text));
+    while ($text =~ /^(?:pub )?(?:fn|const|type) /mg) {
+      my $line = $-[0];
+      if ($line <= $at) { $start = $line } else { $end = $line; last }
+    }
+    my $item = substr($text, $start, $end - $start);
+    $item =~ s/(?:\n(?:\/\/\/[^\n]*|\@[^\n]*|[ \t]*))*\z/\n/;
+    print $item;
+  ' "$1"
 }
 
-# Runs the baseline once, before the first mutant that runs: the tests
-# must pass without a mutant.
-baseline_done=false
-run_baseline() {
-  if [ "$baseline_done" = true ]; then
-    return
-  fi
-  echo "Baseline: the tests must pass without a mutant (PostgreSQL 16 17 18)"
-  baseline=$(run_tests "16 17 18")
-  if [ "$baseline" != "0 0 0" ]; then
-    echo "The tests fail without a mutant ($baseline). Log:"
-    tail -n 60 "$work/test.log"
-    exit 1
-  fi
-  baseline_done=true
-}
-
-# Prints the SHA-256 hash of the files that a mutant depends on.
+# Prints the hash of what a mutant depends on: the item of the source file
+# that the change is in, and the test files.
 dependency_hash() {
-  # shellcheck disable=SC2086
-  cat "$@" | shasum -a 256 | cut -c1-16
+  hash_file="$1"
+  hash_search="$2"
+  shift 2
+  {
+    printf '%s\n' "$hash_file"
+    item_text "$hash_file" "$hash_search" || true
+    cat "$@"
+  } | shasum -a 256 | cut -c1-16
 }
 
 # Prints the recorded row of a mutant on a version, or nothing.
@@ -154,72 +252,54 @@ recorded() {
   awk -F '\t' -v name="$1" -v version="$2" '$1 == name && $2 == version' "$results"
 }
 
+# Runs a command while holding the lock of the results file.
+with_lock() {
+  until mkdir "$work/lock" 2> /dev/null; do
+    sleep 0.1
+  done
+  set +e
+  "$@"
+  status=$?
+  set -e
+  rmdir "$work/lock"
+  return $status
+}
+
 # Replaces the recorded row of a mutant on a version.
-record() {
-  awk -F '\t' -v name="$1" -v version="$2" '!($1 == name && $2 == version)' "$results" > "$work/results"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" >> "$work/results"
-  sort "$work/results" > "$results"
+write_row() {
+  awk -F '\t' -v name="$1" -v version="$2" '!($1 == name && $2 == version)' "$results" > "$work/results.new"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" "$7" >> "$work/results.new"
+  sort "$work/results.new" > "$results"
 }
 
 table="$work/table"
-printf '%-44s %-8s %-8s %-6s %-7s %s\n' "rule" "version" "failing" "fuzz" "corpus" "result" > "$table"
-survivors=0
-broken=0
-skipped=0
-ran=0
+warnings="$work/warnings"
+touch "$table" "$warnings"
 
-# Defines and runs one mutant: name, versions, file, text, replacement,
-# and the test files that kill it.
+# Adds a line to the table, the results file and the row counts.
+record() {
+  # name version hash result failed fuzz corpus seconds note
+  printf '%-44s %-8s %-8s %-6s %-7s %-8s %s\n' "$1" "$2" "$5" "$6" "$7" "$8" "$(echo "$4" | tr 'a-z' 'A-Z')" >> "$table"
+  with_lock write_row "$1" "$2" "$3" "$commit" "$4" "$5" "$9"
+  echo "$4" > "$work/rows/$(printf '%s-%s' "$1" "$2" | shasum | cut -c1-12)"
+}
+
+# Defines one mutant: name, versions, file, text, replacement, and the
+# test files that kill it. Mutants run after all are defined.
+mutant_count=0
 mutant() {
-  name="$1"
-  versions="$2"
-  file="$3"
-  search="$4"
-  replacement="$5"
-  tests="$6"
-  if [ -n "$filter" ] && ! echo "$name" | grep -q -- "$filter"; then
+  if [ -n "$filter" ] && ! echo "$1" | grep -q -- "$filter"; then
     return
   fi
-  # shellcheck disable=SC2086
-  hash=$(dependency_hash "$file" $tests)
-  for version in $versions; do
-    row=$(recorded "$name" "$version")
-    if [ "$run_all" = false ] && [ -n "$row" ] \
-      && [ "$(echo "$row" | cut -f3)" = "$hash" ] \
-      && [ "$(echo "$row" | cut -f5)" = "killed" ]; then
-      skipped=$((skipped + 1))
-      continue
-    fi
-    run_baseline
-    ran=$((ran + 1))
-    rm -rf "$copy/src"
-    cp -R "$work/original/src" "$copy/src"
-    if ! replace_text "$copy/$file" "$search" "$replacement"; then
-      printf '%-44s %-8s %-8s %-6s %-7s %s\n' "$name" "$version" "-" "-" "-" "TEXT NOT FOUND" >> "$table"
-      record "$name" "$version" "$hash" "$commit" "text not found" "-" ""
-      broken=$((broken + 1))
-      continue
-    fi
-    echo "Mutant: $name on PostgreSQL $version"
-    counts=$(run_tests "$version")
-    if [ "$counts" = "none" ]; then
-      printf '%-44s %-8s %-8s %-6s %-7s %s\n' "$name" "$version" "-" "-" "-" "RUN FAILED" >> "$table"
-      record "$name" "$version" "$hash" "$commit" "run failed" "-" ""
-      tail -n 30 "$work/test.log"
-      broken=$((broken + 1))
-      continue
-    fi
-    # shellcheck disable=SC2086
-    set -- $counts
-    if [ "$1" -gt 0 ]; then
-      result="killed"
-    else
-      result="SURVIVED"
-      survivors=$((survivors + 1))
-    fi
-    printf '%-44s %-8s %-8s %-6s %-7s %s\n' "$name" "$version" "$1" "$2" "$3" "$result" >> "$table"
-    record "$name" "$version" "$hash" "$commit" "$(echo "$result" | tr 'A-Z' 'a-z')" "$1" ""
-  done
+  mutant_count=$((mutant_count + 1))
+  definition="$work/mutants/$(printf '%03d' "$mutant_count")"
+  mkdir "$definition"
+  printf '%s' "$1" > "$definition/name"
+  printf '%s' "$2" > "$definition/versions"
+  printf '%s' "$3" > "$definition/file"
+  printf '%s' "$4" > "$definition/search"
+  printf '%s' "$5" > "$definition/replacement"
+  printf '%s' "$6" > "$definition/tests"
 }
 
 # --- Result columns ---------------------------------------------------------
@@ -537,13 +617,350 @@ mutant "array elements: nullable value function" "16" "$gleam_type" \
   'encoder_text(element)' \
   "test/dream_model/generator/gleam_type_test.gleam"
 
+
+# --- Numeric text and the not null elements hint ----------------------------
+
+mutant "numeric: numeric_as_text left off" "16" "$model" \
+  'True -> ["  |> client.numeric_as_text"]' \
+  'True -> []' \
+  "test/dream_model/generator/model_test.gleam test/dream_model/e2e_test.gleam"
+
+mutant "numeric: Float decoder" "16" "$gleam_type" \
+  'NumericType -> "client.numeric_text_decoder()"' \
+  'NumericType -> "client.numeric_decoder()"' \
+  "test/dream_model/generator/gleam_type_test.gleam"
+
+mutant "numeric: Float value function" "16" "$gleam_type" \
+  'NumericType -> "client.numeric_text"' \
+  'NumericType -> "client.float"' \
+  "test/dream_model/generator/gleam_type_test.gleam"
+
+mutant "numeric: numeric[] parameter allowed" "16" "$generator_query" \
+  'case gleam_type.has_numeric(element) {' \
+  'case False {' \
+  "test/dream_model/generator/query_test.gleam"
+
+mutant "not null elements: hint ignored" "16" "$query_hint" \
+  '"not null elements" -> Ok(add_element_names(hints, line))' \
+  '"not null elements" -> Ok(hints)' \
+  "test/dream_model/generator/query_hint_test.gleam test/dream_model/generator/query_test.gleam"
+
+mutant "not null elements: no check of each element" "16" "$model" \
+  '      "client.promised_elements_not_null("
+      <> gleam_type.decoder_text(element, column_literal)
+      <> ", "
+      <> string_literal(file)
+      <> ", "
+      <> column_literal
+      <> ")"' \
+  '"decode.list(" <> gleam_type.decoder_text(element, column_literal) <> ")"' \
+  "test/dream_model/generator/model_test.gleam test/dream_model/e2e_test.gleam"
+
+mutant "not null elements: any column type" "16" "$generator_query" \
+  'Ok(TypedColumn(gleam_type: gleam_type.ListType(_), ..)) -> Ok(Nil)' \
+  'Ok(_) -> Ok(Nil)' \
+  "test/dream_model/generator/query_test.gleam"
+
+# --- Running ----------------------------------------------------------------
+
+# Finds the versions of each mutant that must run, and records the mutants
+# whose text is not in the source.
+skipped=0
+broken=0
+job_versions=""
+for definition in "$work"/mutants/*; do
+  [ -d "$definition" ] || continue
+  name=$(cat "$definition/name")
+  file=$(cat "$definition/file")
+  search=$(cat "$definition/search")
+  # shellcheck disable=SC2046
+  hash=$(dependency_hash "$file" "$search" $(cat "$definition/tests"))
+  printf '%s' "$hash" > "$definition/hash"
+  if ! item_text "$file" "$search" > /dev/null; then
+    for version in $(cat "$definition/versions"); do
+      record "$name" "$version" "$hash" "text not found" "-" "-" "-" "-" ""
+      broken=$((broken + 1))
+    done
+    continue
+  fi
+  run_versions=""
+  for version in $(cat "$definition/versions"); do
+    row=$(recorded "$name" "$version")
+    if [ "$run_all" = false ] && [ -n "$row" ] \
+      && [ "$(echo "$row" | cut -f3)" = "$hash" ] \
+      && [ "$(echo "$row" | cut -f5)" = "killed" ]; then
+      skipped=$((skipped + 1))
+    else
+      run_versions="$run_versions $version"
+      case " $job_versions " in
+        *" $version "*) ;;
+        *) job_versions="$job_versions $version" ;;
+      esac
+    fi
+  done
+  if [ -n "$run_versions" ]; then
+    printf '%s' "$run_versions" > "$definition/run"
+  fi
+done
+
+# Makes the copy of a worker.
+make_copy() {
+  copy="$1"
+  mkdir -p "$copy/build/e2e/model_app"
+  for item in gleam.toml manifest.toml src test scripts docs e2e; do
+    cp -R "$root/$item" "$copy/$item"
+  done
+  for item in packages dev corpus; do
+    cp -R "$root/build/$item" "$copy/build/$item"
+  done
+  cp -R "$root/build/e2e/model_app/build" "$copy/build/e2e/model_app/build"
+}
+
+# Runs `gleam test` in a copy and prints the counts of the run: "failed
+# fuzz corpus modules...", or "none" when no group finished (the run
+# failed). Arguments: copy, database prefix, versions, log, and the test
+# modules ("" for every test).
+run_tests() {
+  set +e
+  (
+    cd "$1" \
+      && env DREAM_MODEL_TEST_DATABASE_PREFIX="$2" DREAM_MODEL_TEST_VERSIONS="$3" \
+        DREAM_MODEL_TEST_COVERAGE=off ${5:+"DREAM_MODEL_TEST_MODULES=$5"} \
+        gleam test
+  ) > "$4" 2>&1
+  set -e
+  finished=$(grep -E '^Finished: ' "$4" || true)
+  if [ -z "$finished" ]; then
+    echo "none"
+    return
+  fi
+  failed=$(echo "$finished" | sed -E 's/.* ([0-9]+) failed, .*/\1/' | awk '{ total += $1 } END { print total }')
+  modules=$(echo "$finished" | sed -E 's/.*failed modules: \[(.*)\]$/\1/' | tr ' ' '\n' | sort -u | tr '\n' ' ')
+  fuzz=$(grep -c '✗ seed ' "$4" || true)
+  corpus=$(grep -c '✗ finds no wrong never-NULL' "$4" || true)
+  echo "$failed $fuzz $corpus $modules"
+}
+
+# Prints the test modules of a list of test files: the files in
+# test/dream_model.
+test_modules() {
+  for test_file in "$@"; do
+    case "$test_file" in
+      test/dream_model/*.gleam) basename "$test_file" .gleam ;;
+    esac
+  done | tr '\n' ' '
+}
+
+# Marks a source file of a copy as changed: Gleam can reuse a stale
+# compiled module when a file is put back with an older modification time,
+# so this sets the time to now and removes the compiled cache of the module.
+fresh_source() {
+  touch "$1/$2"
+  module=$(echo "${2#src/}" | sed -e 's/\.gleam$//' -e 's#/#@#g')
+  rm -f "$1/build/dev/erlang/dream_model/_gleam_artefacts/dream_model@$module.cache" \
+    "$1/build/dev/erlang/dream_model/_gleam_artefacts/dream_model@$module.cache_meta"
+}
+
+# Puts the original of a source file back into a copy.
+restore_source() {
+  cp "$work/original/$2" "$1/$2"
+  fresh_source "$1" "$2"
+}
+
+# Runs one mutant in the copy of a worker.
+run_mutant() {
+  definition="$1"
+  copy="$2"
+  prefix="$3"
+  name=$(cat "$definition/name")
+  file=$(cat "$definition/file")
+  hash=$(cat "$definition/hash")
+  # shellcheck disable=SC2046
+  modules=$(test_modules $(cat "$definition/tests"))
+  log="$definition/test.log"
+  restore_source "$copy" "$file"
+  replace_text "$copy/$file" "$(cat "$definition/search")" "$(cat "$definition/replacement")"
+  fresh_source "$copy" "$file"
+  started=$(date +%s)
+  echo "Mutant: $name on PostgreSQL$(cat "$definition/run")"
+  # One build for every version of the mutant.
+  if ! (cd "$copy" && gleam build) > "$definition/build.log" 2>&1; then
+    for version in $(cat "$definition/run"); do
+      record "$name" "$version" "$hash" "run failed" "-" "-" "-" "-" "the mutant does not compile"
+    done
+    tail -n 20 "$definition/build.log"
+    restore_source "$copy" "$file"
+    return
+  fi
+  for version in $(cat "$definition/run"); do
+    note="own modules"
+    counts=$(run_tests "$copy" "$prefix" "$version" "$log" "$modules")
+    if [ "$counts" != "none" ] && [ "$(echo "$counts" | cut -d' ' -f1)" -eq 0 ] \
+      && [ "$own_only" = false ] && ! grep -q 'No space left on device' "$log"; then
+      note="all tests"
+      counts=$(run_tests "$copy" "$prefix" "$version" "$log" "")
+    fi
+    seconds=$(($(date +%s) - started))
+    if grep -q 'No space left on device' "$log"; then
+      record "$name" "$version" "$hash" "error" "-" "-" "-" "$seconds" "no space left on device"
+      started=$(date +%s)
+      continue
+    fi
+    if [ "$counts" = "none" ]; then
+      record "$name" "$version" "$hash" "run failed" "-" "-" "-" "$seconds" ""
+      tail -n 30 "$log"
+      continue
+    fi
+    # shellcheck disable=SC2086
+    set -- $counts
+    if [ "$1" -gt 0 ]; then
+      result="killed"
+      if [ "$note" = "all tests" ]; then
+        shift 3
+        echo "WARNING: \"$name\" on $version survived its own test modules ($modules) but these killed it: $*. Add them to the mutant." >> "$warnings"
+        set -- $counts
+      fi
+    else
+      result="survived"
+      if [ "$note" = "own modules" ]; then
+        note="own modules only"
+      else
+        note=""
+      fi
+    fi
+    record "$name" "$version" "$hash" "$result" "$1" "$2" "$3" "$seconds" "$note"
+    started=$(date +%s)
+  done
+  restore_source "$copy" "$file"
+  drop_databases "$prefix"
+}
+
+# Checks that a worker sees each change of its copy: a known mutant must
+# be killed, and the tests must pass again after the file is put back.
+check_worker() {
+  copy="$work/worker$1"
+  prefix="${prefix_base}w$1_"
+  check_search='case iterations > 0, iterations > maximum_iterations {'
+  replace_text "$copy/$scram" "$check_search" 'case iterations > 0, False {'
+  fresh_source "$copy" "$scram"
+  mutated=$(run_tests "$copy" "$prefix" 16 "$work/check$1.log" scram_test)
+  restore_source "$copy" "$scram"
+  restored=$(run_tests "$copy" "$prefix" 16 "$work/check$1.log" scram_test)
+  case "$mutated" in
+    none | "0 "*)
+      echo "Worker $1: the check mutant was not killed ($mutated)"
+      return 1
+      ;;
+  esac
+  case "$restored" in
+    "0 "*) ;;
+    *)
+      echo "Worker $1: the tests fail after the check mutant was put back ($restored)"
+      return 1
+      ;;
+  esac
+}
+
+# A worker: takes the next mutant that no other worker took, until none
+# is left.
+run_worker() {
+  copy="$work/worker$1"
+  prefix="${prefix_base}w$1_"
+  if ! check_worker "$1"; then
+    return 1
+  fi
+  for definition in "$work"/mutants/*; do
+    [ -f "$definition/run" ] || continue
+    mkdir "$work/claims/$(basename "$definition")" 2> /dev/null || continue
+    run_mutant "$definition" "$copy" "$prefix"
+  done
+}
+
+printf '%-44s %-8s %-8s %-6s %-7s %-8s %s\n' "rule" "version" "failing" "fuzz" "corpus" "seconds" "result" > "$table.head"
+if [ -n "$job_versions" ]; then
+  echo "Making the copies of $jobs workers"
+  worker=1
+  while [ "$worker" -le "$jobs" ]; do
+    make_copy "$work/worker$worker"
+    worker=$((worker + 1))
+  done
+  # The baseline: every test must pass without a mutant.
+  echo "Baseline: every test must pass without a mutant (PostgreSQL$job_versions)"
+  baseline_modules=""
+  if [ "$own_only" = true ]; then
+    for definition in "$work"/mutants/*; do
+      if [ -f "$definition/run" ]; then
+        # shellcheck disable=SC2046
+        baseline_modules="$baseline_modules $(test_modules $(cat "$definition/tests"))"
+      fi
+    done
+    baseline_modules=$(echo "$baseline_modules" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+    echo "Baseline modules:$baseline_modules"
+  fi
+  baseline=$(run_tests "$work/worker1" "${prefix_base}w1_" "${job_versions# }" "$work/baseline.log" "$baseline_modules")
+  drop_databases "${prefix_base}w1_"
+  case "$baseline" in
+    "0 0 0"*) ;;
+    *)
+      echo "The tests fail without a mutant ($baseline). Log:"
+      tail -n 60 "$work/baseline.log"
+      exit 1
+      ;;
+  esac
+  worker=1
+  while [ "$worker" -le "$jobs" ]; do
+    run_worker "$worker" &
+    worker_pids="$worker_pids $!"
+    worker=$((worker + 1))
+  done
+  for pid in $worker_pids; do
+    wait "$pid" || echo "A worker stopped with an error"
+  done
+  worker_pids=""
+fi
+
+ran=0
+survivors=0
+errors=0
+for row in "$work"/rows/*; do
+  [ -f "$row" ] || continue
+  case "$(cat "$row")" in
+    killed) ran=$((ran + 1)) ;;
+    survived)
+      ran=$((ran + 1))
+      survivors=$((survivors + 1))
+      ;;
+    "text not found") ;;
+    error)
+      ran=$((ran + 1))
+      errors=$((errors + 1))
+      ;;
+    *)
+      ran=$((ran + 1))
+      broken=$((broken + 1))
+      ;;
+  esac
+done
+
+for definition in "$work"/mutants/*; do
+  if [ -f "$definition/run" ] && [ ! -d "$work/claims/$(basename "$definition")" ]; then
+    echo "No worker ran the mutant \"$(cat "$definition/name")\""
+    broken=$((broken + 1))
+  fi
+done
+
 echo
-cat "$table"
+cat "$table.head"
+sort "$table"
 echo
 echo "failing: failed tests; fuzz: failed fuzz seeds; corpus: failed corpus runs"
 echo "$ran mutant runs, $skipped skipped (a killed result with the same hash is in scripts/mutation-results.tsv)"
-if [ "$survivors" -gt 0 ] || [ "$broken" -gt 0 ]; then
-  echo "$survivors mutants survived, $broken mutants did not apply, build or run"
+if [ -s "$warnings" ]; then
+  echo
+  cat "$warnings"
+fi
+if [ "$survivors" -gt 0 ] || [ "$broken" -gt 0 ] || [ "$errors" -gt 0 ]; then
+  echo "$survivors mutants survived, $broken mutants did not apply, build or run, $errors runs had no disk space"
   exit 1
 fi
 echo "Every mutant was killed"

@@ -50,9 +50,9 @@ jobs:
       - name: Download dependencies
         run: gleam deps download
 
-      # The end-to-end tests build the app of e2e/model_app in a copy at
-      # build/e2e/model_app, and they use the packages in
-      # build/e2e/model_app/build/packages. Keep these packages between runs
+      # The end-to-end tests build the app of e2e/model_app in a copy for
+      # each version at build/e2e/<version>/model_app, with the packages
+      # of build/e2e/model_app/build/packages. Keep these packages between runs
       # too, so that the download below asks Hex only when
       # e2e/model_app/manifest.toml changes.
       - name: Restore the packages of the end-to-end app

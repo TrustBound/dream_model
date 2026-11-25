@@ -2,8 +2,8 @@
 # Gets the packages of the end-to-end app in e2e/model_app. CI runs this
 # script before the tests and before the mutation test.
 #
-# The end-to-end tests copy the app to build/e2e/model_app and build it
-# there, with the packages in build/e2e/model_app/build/packages. The app
+# The end-to-end tests copy the app to build/e2e/<version>/model_app and
+# build it there, with the packages in build/e2e/model_app/build/packages. The app
 # has dream_model as a dev dependency, and the tests always run the
 # dream_model of this checkout, not a release on Hex. So this script:
 #

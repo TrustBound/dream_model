@@ -59,7 +59,7 @@ pub fn tests(version: Int) -> TestSuite {
       ),
       it("a column number that the table does not have", fn() {
         // Arrange
-        let connection = servers.connect(version, attack_database.database)
+        let connection = servers.connect(version, attack_database.database())
         let assert Ok([[Some(oid)]]) =
           wire.simple_query(connection, "select 'users'::regclass::oid")
         let oid = int.parse(oid) |> result.unwrap(0)

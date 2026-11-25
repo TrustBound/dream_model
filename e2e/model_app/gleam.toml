@@ -1,6 +1,6 @@
 # The app of the end-to-end tests of dream_model. The tests copy it to
-# build/e2e/model_app, generate its models there against each PostgreSQL
-# version, compare them with the models in src/app/models, and run
+# build/e2e/<version>/model_app, generate its models there against each
+# PostgreSQL version, compare them with the models in src/app/models, and run
 # test/model_app_test.gleam against the database.
 name = "model_app"
 version = "1.0.0"

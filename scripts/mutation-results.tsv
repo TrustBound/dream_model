@@ -1,48 +1,60 @@
-MERGE source without match	17	2f54a4ffcb37d2e2	ba57fb2	killed	6	
-NOT VALID NOT NULL	18	2f54a4ffcb37d2e2	ba57fb2	killed	4	
-RETURNING old/new row missing	18	2f54a4ffcb37d2e2	ba57fb2	killed	11	
-array elements: Option type	16	d884e708c2b0d9b2	caabd00	killed	-	carried over from caabd00
-array elements: nullable value function	16	d884e708c2b0d9b2	caabd00	killed	-	carried over from caabd00
-array elements: optional decoder	16	d884e708c2b0d9b2	caabd00	killed	-	carried over from caabd00
-computed value assumed not null	16	2f54a4ffcb37d2e2	ba57fb2	killed	58	
-fingerprint: views that a query reads	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
-foreign child table	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
-grouping sets empty a column	16	2f54a4ffcb37d2e2	ba57fb2	killed	14	
-grouping sets empty a column	17	2f54a4ffcb37d2e2	ba57fb2	killed	14	
-grouping-expression hazard	16	2f54a4ffcb37d2e2	ba57fb2	killed	19	
-hints: only the comment block at the top	16	47de5b2249a32845	ba57fb2	killed	3	
-inheritance child tables	18	2f54a4ffcb37d2e2	ba57fb2	killed	7	
-never-NULL EXISTS: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	1	
-never-NULL EXISTS: only EXISTS sublinks	16	2f54a4ffcb37d2e2	ba57fb2	killed	10	
-never-NULL IS DISTINCT FROM: built-in only	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
-never-NULL IS DISTINCT FROM: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	1	
-never-NULL IS [NOT] NULL: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
-never-NULL coalesce: last argument not NULL	16	2f54a4ffcb37d2e2	ba57fb2	killed	13	
-never-NULL coalesce: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	7	
-never-NULL constant: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	18	
-never-NULL constant: only non-NULL ones	16	2f54a4ffcb37d2e2	ba57fb2	killed	11	
-never-NULL count: off	16	2f54a4ffcb37d2e2	ba57fb2	killed	12	
-never-NULL count: only count	16	2f54a4ffcb37d2e2	ba57fb2	killed	10	
-never-NULL count: only pg_catalog count	16	2f54a4ffcb37d2e2	ba57fb2	killed	4	
-outer-join nulling (varnullingrels)	16	2f54a4ffcb37d2e2	ba57fb2	killed	71	
-parameter store: any function is pass-through	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
-parameter store: column NOT NULL	16	2f54a4ffcb37d2e2	ba57fb2	killed	42	
-parameter store: length coercion is pass-through	16	2f54a4ffcb37d2e2	ba57fb2	killed	12	
-parameter store: used outside the store	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
-parameter: BEFORE trigger	16	2f54a4ffcb37d2e2	ba57fb2	killed	8	
-parameter: CHECK constraint	16	2f54a4ffcb37d2e2	ba57fb2	killed	6	
-parameter: a rule adds queries	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
-parameter: casts to a domain	16	2f54a4ffcb37d2e2	ba57fb2	killed	9	
-parameter: domain CHECK	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
-parameter: domain NOT NULL	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
-parameter: generated column	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
-parameter: partition CHECK	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
-parameter: partition NOT NULL	16	2f54a4ffcb37d2e2	ba57fb2	killed	5	
-parameter: partition is not a table	16	2f54a4ffcb37d2e2	ba57fb2	killed	2	
-parameter: partition key	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
-parameter: row-level security	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
-parameter: target is not a table	16	2f54a4ffcb37d2e2	ba57fb2	survived	0	
-parameter: view WITH CHECK OPTION	16	2f54a4ffcb37d2e2	ba57fb2	killed	3	
-parameter: whole-row CHECK	16	2f54a4ffcb37d2e2	ba57fb2	killed	4	
-trigger: INSTEAD OF row bit	16	4bd5f405e462aabb	ba57fb2	killed	1	
-trigger: statement-level BEFORE	16	4bd5f405e462aabb	ba57fb2	killed	1	
+--check: stale modules	16	1adb4d2ced6fe262	c937b32	killed	4	own modules
+MERGE source without match	17	2df8c114d0dbd10c	ba57fb2	killed	6	carried over from ba57fb2: hash per function
+NOT VALID NOT NULL	18	62db945842c2174e	ba57fb2	killed	4	carried over from ba57fb2: hash per function
+RETURNING old/new row missing	18	2df8c114d0dbd10c	ba57fb2	killed	11	carried over from ba57fb2: hash per function
+SCRAM: the iteration cap	16	6494c3fbce3a34ff	c937b32	killed	1	own modules
+URL: an @ after the host	16	cf176bb15de22713	c937b32	killed	1	own modules
+URL: unknown query keys	16	def5c8738201d90c	c937b32	killed	1	own modules
+array elements: Option type	16	d08a247f534b9b51	caabd00	killed	-	carried over from caabd00; hash per function
+array elements: nullable value function	16	fe5ca3849d1ceb2b	caabd00	killed	-	carried over from caabd00; hash per function
+array elements: optional decoder	16	2a5db071edeb23a3	caabd00	killed	-	carried over from caabd00; hash per function
+computed value assumed not null	16	8825873514c6790c	ba57fb2	killed	58	carried over from ba57fb2: hash per function
+fingerprint: views that a query reads	16	c621594ac2a12058	ba57fb2	killed	2	carried over from ba57fb2: hash per function
+foreign child table	16	62db945842c2174e	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+grouping sets empty a column	16	2df8c114d0dbd10c	ba57fb2	killed	14	carried over from ba57fb2: hash per function
+grouping sets empty a column	17	2df8c114d0dbd10c	ba57fb2	killed	14	carried over from ba57fb2: hash per function
+grouping-expression hazard	16	549b882a5976b378	ba57fb2	killed	19	carried over from ba57fb2: hash per function
+hints: only the comment block at the top	16	fbffa45f0030f5d9	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+inheritance child tables	18	e7360b52299e8882	ba57fb2	killed	7	carried over from ba57fb2: hash per function
+names: one decoder for two types	16	a79af871c1686fde	c937b32	killed	1	own modules
+names: parameter of a decoder	16	fce7242c52d3bd9c	c937b32	killed	1	own modules
+names: parameter of a helper	16	fce7242c52d3bd9c	c937b32	killed	1	own modules
+names: reserved type names	16	a79af871c1686fde	c937b32	killed	2	own modules
+never-NULL EXISTS: off	16	8825873514c6790c	ba57fb2	killed	1	carried over from ba57fb2: hash per function
+never-NULL EXISTS: only EXISTS sublinks	16	8825873514c6790c	ba57fb2	killed	10	carried over from ba57fb2: hash per function
+never-NULL IS DISTINCT FROM: built-in only	16	8825873514c6790c	ba57fb2	killed	2	carried over from ba57fb2: hash per function
+never-NULL IS DISTINCT FROM: off	16	8825873514c6790c	ba57fb2	killed	1	carried over from ba57fb2: hash per function
+never-NULL IS [NOT] NULL: off	16	8825873514c6790c	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+never-NULL coalesce: last argument not NULL	16	8825873514c6790c	c937b32	killed	9	own modules
+never-NULL coalesce: off	16	8825873514c6790c	c937b32	killed	6	own modules
+never-NULL constant: off	16	8825873514c6790c	c937b32	killed	17	own modules
+never-NULL constant: only non-NULL ones	16	8825873514c6790c	c937b32	killed	8	own modules
+never-NULL count: off	16	8825873514c6790c	c937b32	killed	7	own modules
+never-NULL count: only count	16	8825873514c6790c	c937b32	killed	6	own modules
+never-NULL count: only pg_catalog count	16	9963d5eb90779669	c937b32	killed	4	own modules
+outer-join nulling (varnullingrels)	16	2df8c114d0dbd10c	ba57fb2	killed	71	carried over from ba57fb2: hash per function
+parameter store: any function is pass-through	16	44aad9ab5f156c5f	ba57fb2	killed	2	carried over from ba57fb2: hash per function
+parameter store: column NOT NULL	16	e730bbd9856a01c6	ba57fb2	killed	42	carried over from ba57fb2: hash per function
+parameter store: length coercion is pass-through	16	44aad9ab5f156c5f	ba57fb2	killed	12	carried over from ba57fb2: hash per function
+parameter store: used outside the store	16	b0979fe7ed1d2751	ba57fb2	killed	2	carried over from ba57fb2: hash per function
+parameter: BEFORE trigger	16	e730bbd9856a01c6	ba57fb2	killed	8	carried over from ba57fb2: hash per function
+parameter: CHECK constraint	16	e730bbd9856a01c6	ba57fb2	killed	6	carried over from ba57fb2: hash per function
+parameter: a rule adds queries	16	284d3bc5a6cec8d2	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+parameter: casts to a domain	16	e730bbd9856a01c6	ba57fb2	killed	9	carried over from ba57fb2: hash per function
+parameter: domain CHECK	16	a4f6c3cf67fc6d6f	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+parameter: domain NOT NULL	16	a4f6c3cf67fc6d6f	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+parameter: generated column	16	aecc955218a84965	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+parameter: partition CHECK	16	aecc955218a84965	ba57fb2	killed	2	carried over from ba57fb2: hash per function
+parameter: partition NOT NULL	16	aecc955218a84965	ba57fb2	killed	5	carried over from ba57fb2: hash per function
+parameter: partition is not a table	16	9d858a4a93c814d7	ba57fb2	killed	2	carried over from ba57fb2: hash per function
+parameter: partition key	16	aecc955218a84965	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+parameter: row-level security	16	e730bbd9856a01c6	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+parameter: target is not a table	16	e730bbd9856a01c6	c937b32	survived	0	
+parameter: view WITH CHECK OPTION	16	e730bbd9856a01c6	ba57fb2	killed	3	carried over from ba57fb2: hash per function
+parameter: whole-row CHECK	16	fba129bc92b9b444	ba57fb2	killed	4	carried over from ba57fb2: hash per function
+trigger: INSTEAD OF row bit	16	1ae2a1786c120256	ba57fb2	killed	1	carried over from ba57fb2: hash per function
+trigger: statement-level BEFORE	16	1ae2a1786c120256	ba57fb2	killed	1	carried over from ba57fb2: hash per function
+unique hint: refuse an ambiguous name	16	f40549c30d9b8432	c937b32	killed	3	own modules
+wire: cleartext needs TLS	16	ee92082da2607199	c937b32	killed	1	own modules
+wire: close after a broken response	16	2a02d9988b1f8f1d	c937b32	killed	1	own modules
+write: a file without the header	16	f448bc943a1d94a8	c937b32	killed	1	own modules

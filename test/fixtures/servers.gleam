@@ -4,6 +4,12 @@
 //// `DREAM_MODEL_TEST_VERSIONS` picks the versions that the database tests
 //// run on, for example `DREAM_MODEL_TEST_VERSIONS="16 18"`. The default is
 //// every supported version.
+////
+//// `DREAM_MODEL_TEST_DATABASE_PREFIX` puts a prefix before the name of each
+//// database that the tests create, for example
+//// `DREAM_MODEL_TEST_DATABASE_PREFIX=w1_`. Two test runs with different
+//// prefixes can then use the same servers at the same time. The default is
+//// no prefix. The prefix can hold only lowercase letters, digits and `_`.
 
 import dream_model/postgres/wire
 import gleam/int
@@ -28,6 +34,32 @@ pub fn versions() -> List(Int) {
     |> list.filter_map(int.parse)
   })
   |> result.unwrap(default_versions)
+}
+
+/// Returns the prefix of the databases that the tests create, from
+/// `DREAM_MODEL_TEST_DATABASE_PREFIX`, or "" when the variable is not set.
+pub fn database_prefix() -> String {
+  let prefix =
+    read_environment_variable("DREAM_MODEL_TEST_DATABASE_PREFIX")
+    |> result.unwrap("")
+  let allowed = "abcdefghijklmnopqrstuvwxyz0123456789_"
+  let valid =
+    string.length(prefix) <= 20
+    && list.all(string.to_graphemes(prefix), string.contains(allowed, _))
+  case valid {
+    True -> prefix
+    False ->
+      panic as {
+        "DREAM_MODEL_TEST_DATABASE_PREFIX can hold at most 20 lowercase letters, digits and _, not "
+        <> prefix
+      }
+  }
+}
+
+/// Returns the name of a database that the tests create, with the prefix
+/// of `DREAM_MODEL_TEST_DATABASE_PREFIX` before it.
+pub fn database_name(name: String) -> String {
+  database_prefix() <> name
 }
 
 /// Returns the URL of a database on the server of a version.
