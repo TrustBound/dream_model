@@ -2,7 +2,7 @@
 %% JSON decoding, the clock, and a fake PostgreSQL server that follows a
 %% script, for the protocol cases that a real server never sends.
 -module(dream_model_test_ffi).
--export([get_env/1, get_arguments/0, decode_json/1, monotonic_milliseconds/0,
+-export([read_environment_variable/1, get_arguments/0, decode_json/1, monotonic_milliseconds/0,
          start_fake_server/1, run/4]).
 
 %% Runs a program found on the PATH in a folder, with more environment
@@ -24,7 +24,7 @@ collect(Port, Output) ->
             {Status, iolist_to_binary(lists:reverse(Output))}
     end.
 
-get_env(Name) ->
+read_environment_variable(Name) ->
     case os:getenv(binary_to_list(Name)) of
         false -> {error, nil};
         Value -> {ok, unicode:characters_to_binary(Value)}

@@ -25,6 +25,7 @@ pub const e2e_schema_path = "e2e/model_app/schema.sql"
 pub const extra_schema =
   "
 create view user_emails as select id, email from users;
+create view post_authors as select u.id, p.title from users u join posts p on p.user_id = u.id;
 create table events (id int, kind text, note text, primary key (id, kind))
   partition by list (kind);
 create table events_a partition of events for values in ('a');

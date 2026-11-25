@@ -3,6 +3,11 @@
 //// Gleam module next to each folder. With `--check` it writes nothing and
 //// lists every module that is missing or differs.
 ////
+//// A generated module starts with a header line that names its folder. A
+//// module whose folder holds no `.sql` file any more is stale: generation
+//// removes it, and `--check` lists it. The command never overwrites or
+//// removes a file without the header line.
+////
 //// The settings are in the `[tools.dream_model]` table of the app's
 //// `gleam.toml`:
 ////
@@ -71,15 +76,15 @@ fn run_program(
 ) -> Result(#(Int, String), Nil)
 
 /// Runs the command in the project folder `directory`, prints what it says
-/// and ends the program with `halt` when the command failed. `get_env`
-/// reads an environment variable.
+/// and ends the program with `halt` when the command failed.
+/// `read_environment` reads an environment variable.
 pub fn main(
   arguments: List(String),
   directory: String,
-  get_env: fn(String) -> Result(String, Nil),
+  read_environment: fn(String) -> Result(String, Nil),
   halt: fn(Int) -> Nil,
 ) -> Nil {
-  let outcome = run(arguments, directory, get_env)
+  let outcome = run(arguments, directory, read_environment)
   io.print(outcome.output)
   case outcome.status {
     0 -> Nil
@@ -87,14 +92,14 @@ pub fn main(
   }
 }
 
-/// Runs the command in the project folder `directory`. `get_env` reads an
-/// environment variable.
+/// Runs the command in the project folder `directory`. `read_environment`
+/// reads an environment variable.
 pub fn run(
   arguments: List(String),
   directory: String,
-  get_env: fn(String) -> Result(String, Nil),
+  read_environment: fn(String) -> Result(String, Nil),
 ) -> Outcome {
-  case execute(arguments, directory, get_env) {
+  case execute(arguments, directory, read_environment) {
     Ok(output) -> Outcome(status: 0, output:)
     Error(output) -> Outcome(status: 1, output:)
   }
@@ -103,19 +108,23 @@ pub fn run(
 fn execute(
   arguments: List(String),
   directory: String,
-  get_env: fn(String) -> Result(String, Nil),
+  read_environment: fn(String) -> Result(String, Nil),
 ) -> Result(String, String) {
   use mode <- result.try(parse_arguments(arguments))
   use config <- result.try(read_config(directory))
   use folders <- result.try(find_folders(directory, config))
+  use stale <- result.try(find_stale_modules(directory))
   use <- bool.guard(
-    when: folders == [],
+    when: folders == [] && stale == [],
     return: Ok(
       "dream_model found no folder with .sql files under src; there is nothing to generate.\n",
     ),
   )
+  use <- bool.lazy_guard(when: folders == [], return: fn() {
+    finish(mode, directory, [], stale)
+  })
   use url <- result.try(
-    get_env(config.database_url_variable)
+    read_environment(config.database_url_variable)
     |> result.replace_error(
       "dream_model needs the URL of the database in the environment variable "
       <> config.database_url_variable
@@ -131,9 +140,23 @@ fn execute(
     }),
   )
   let generated = generate(analyzer, directory, folders)
-  let _closed = nullability.close(analyzer)
+  let closed = nullability.close(analyzer)
   use modules <- result.try(generated)
-  finish(mode, directory, modules)
+  use Nil <- result.try(check_closed(closed))
+  finish(mode, directory, modules, stale)
+}
+
+/// The analysis is complete, so a failed goodbye to the server changes no
+/// module. It still means the connection broke, so the command fails and
+/// says so, and writes nothing.
+pub fn check_closed(
+  closed: Result(Nil, nullability.AnalysisError),
+) -> Result(Nil, String) {
+  result.map_error(closed, fn(error) {
+    "dream_model cannot close the database connection: "
+    <> nullability.error_to_string(error)
+    <> "\n"
+  })
 }
 
 /// Returns the mode of the command line arguments.
@@ -262,6 +285,21 @@ pub fn find_folders(
 }
 
 fn discover_folders(directory: String) -> Result(List(String), String) {
+  use files <- result.map(source_files(directory))
+  list.filter(files, string.ends_with(_, ".sql"))
+  |> list.map(fn(file) {
+    let folder = filepath.directory_name(file)
+    case folder {
+      "src/" <> _ -> folder
+      _ -> "src"
+    }
+  })
+  |> list.unique
+}
+
+/// Every file under `src`, as a path relative to the project, for example
+/// `src/app/models/user.gleam`.
+fn source_files(directory: String) -> Result(List(String), String) {
   let source = filepath.join(directory, "src")
   use files <- result.map(
     simplifile.get_files(in: source)
@@ -271,15 +309,29 @@ fn discover_folders(directory: String) -> Result(List(String), String) {
       <> "\n"
     }),
   )
-  list.filter(files, string.ends_with(_, ".sql"))
-  |> list.map(fn(file) {
-    let folder = filepath.directory_name(file)
-    case string.starts_with(folder, source <> "/") {
-      True -> "src/" <> string.drop_start(folder, string.length(source) + 1)
-      False -> "src"
-    }
+  list.map(files, fn(file) {
+    "src/" <> string.drop_start(file, string.length(source) + 1)
   })
-  |> list.unique
+}
+
+/// The generated modules whose folder holds no `.sql` file: each `.gleam`
+/// file under `src` that starts with the header line of its folder, the
+/// path without `.gleam`.
+fn find_stale_modules(directory: String) -> Result(List(String), String) {
+  use files <- result.map(source_files(directory))
+  list.filter(files, fn(file) {
+    let folder = string.drop_end(file, string.length(".gleam"))
+    string.ends_with(file, ".gleam")
+    && starts_with_header(directory, file, folder)
+    && sql_files(directory, folder) |> result.unwrap([]) == []
+  })
+  |> list.sort(string.compare)
+}
+
+fn starts_with_header(directory: String, path: String, folder: String) -> Bool {
+  simplifile.read(filepath.join(directory, path))
+  |> result.map(string.starts_with(_, model.header_line(folder) <> "\n"))
+  |> result.unwrap(False)
 }
 
 fn check_model_folders(
@@ -445,7 +497,7 @@ fn format(
   modules: List(Generated),
 ) -> Result(List(Generated), String) {
   let work = filepath.join(directory, "build/dream_model/format")
-  let _removed = simplifile.delete(work)
+  use Nil <- result.try(check_removed(simplifile.delete(work)))
   let files =
     list.index_map(modules, fn(_, index) {
       "build/dream_model/format/module_" <> int.to_string(index) <> ".gleam"
@@ -482,24 +534,99 @@ fn format(
   })
 }
 
+/// The format folder of an earlier run is removed first. A folder that
+/// does not exist is fine.
+pub fn check_removed(
+  removed: Result(Nil, simplifile.FileError),
+) -> Result(Nil, String) {
+  case removed {
+    Ok(Nil) | Error(simplifile.Enoent) | Error(simplifile.Enotdir) -> Ok(Nil)
+    Error(error) ->
+      Error(
+        "dream_model cannot remove build/dream_model/format: "
+        <> simplifile.describe_error(error)
+        <> "\n",
+      )
+  }
+}
+
 // --- Writing and checking --------------------------------------------------
 
 fn finish(
   mode: Mode,
   directory: String,
   modules: List(Generated),
+  stale: List(String),
 ) -> Result(String, String) {
   case mode {
-    Generate -> write_modules(directory, modules)
-    Check -> check_modules(directory, modules)
+    Generate -> write_modules(directory, modules, stale)
+    Check -> check_modules(directory, modules, stale)
   }
 }
 
 fn write_modules(
   directory: String,
   modules: List(Generated),
+  stale: List(String),
 ) -> Result(String, String) {
-  list.try_map(modules, fn(module) {
+  use Nil <- result.try(refuse_foreign_files(directory, modules))
+  use written <- result.try(
+    list.try_map(modules, write_module(directory, _))
+    |> result.map(string.concat),
+  )
+  use removed <- result.map(
+    list.try_map(stale, fn(path) {
+      simplifile.delete(filepath.join(directory, path))
+      |> result.replace("removed " <> path <> "\n")
+      |> result.map_error(fn(error) {
+        "dream_model cannot remove "
+        <> path
+        <> ": "
+        <> simplifile.describe_error(error)
+        <> "\n"
+      })
+    }),
+  )
+  written <> string.concat(removed)
+}
+
+/// Refuses to write over a file that dream_model did not write: one that
+/// does not start with the header line of its folder.
+fn refuse_foreign_files(
+  directory: String,
+  modules: List(Generated),
+) -> Result(Nil, String) {
+  let foreign =
+    list.filter(modules, fn(module) {
+      let folder = string.drop_end(module.path, string.length(".gleam"))
+      simplifile.is_file(filepath.join(directory, module.path)) == Ok(True)
+      && !starts_with_header(directory, module.path, folder)
+    })
+  case foreign {
+    [] -> Ok(Nil)
+    _ ->
+      Error(
+        list.map(foreign, fn(module) {
+          "dream_model will not overwrite "
+          <> module.path
+          <> ": the file does not start with the line '"
+          <> model.header_line(string.drop_end(
+            module.path,
+            string.length(".gleam"),
+          ))
+          <> "', so dream_model did not write it; move the file, and run the command again\n"
+        })
+        |> string.concat
+        <> "dream_model wrote nothing.\n",
+      )
+  }
+}
+
+fn write_module(
+  directory: String,
+  module: Generated,
+) -> Result(String, String) {
+  {
     let path = filepath.join(directory, module.path)
     let unchanged = simplifile.read(path) == Ok(module.text)
     use Nil <- result.map(
@@ -516,15 +643,15 @@ fn write_modules(
       True -> "unchanged " <> module.path <> "\n"
       False -> "wrote " <> module.path <> "\n"
     }
-  })
-  |> result.map(string.concat)
+  }
 }
 
 fn check_modules(
   directory: String,
   modules: List(Generated),
+  stale: List(String),
 ) -> Result(String, String) {
-  let stale =
+  let differing =
     list.filter_map(modules, fn(module) {
       case simplifile.read(filepath.join(directory, module.path)) {
         Ok(text) if text == module.text -> Error(Nil)
@@ -532,7 +659,8 @@ fn check_modules(
         Error(_) -> Ok("missing " <> module.path <> "\n")
       }
     })
-  case stale {
+    |> list.append(list.map(stale, fn(path) { "stale " <> path <> "\n" }))
+  case differing {
     [] ->
       Ok(
         "every model module matches its .sql files ("
@@ -541,7 +669,7 @@ fn check_modules(
       )
     _ ->
       Error(
-        string.concat(stale)
+        string.concat(differing)
         <> "Run `gleam run -m dream_model` to write the modules again.\n",
       )
   }

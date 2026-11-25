@@ -37,7 +37,7 @@ fn parse_tests() {
             returns: None,
             not_found: None,
             unique: [],
-            params_line: None,
+            parameters_line: None,
             column_names: [],
           ),
         ),
@@ -64,7 +64,7 @@ fn parse_tests() {
               UniqueHint("users_email_key", "Email already taken", 3),
               UniqueHint("users_pkey", "Id taken", 4),
             ],
-            params_line: Some(7),
+            parameters_line: Some(7),
             column_names: [
               NamedLine("a", 5),
               NamedLine("b", 5),
@@ -74,6 +74,30 @@ fn parse_tests() {
         ),
       )
       |> or_fail_with("Expected every hint")
+    }),
+    it("reads only the comment block at the top of the file", fn() {
+      // Arrange
+      let sql =
+        "-- returns: many\n\nselect email\n-- returns: one User\n-- unique users_email_key: Taken\nfrom users"
+
+      // Act
+      let hints = query_hint.parse(sql)
+
+      // Assert
+      hints
+      |> should
+      |> be_equal(
+        Ok(
+          QueryHints(
+            returns: Some(ReturnsHint(ReturnsMany, None, 1)),
+            not_found: None,
+            unique: [],
+            parameters_line: None,
+            column_names: [],
+          ),
+        ),
+      )
+      |> or_fail_with("Expected only the hints before the statement")
     }),
     it("reads maybe with a type of another model", fn() {
       // Arrange
@@ -138,7 +162,7 @@ fn refusal_tests() {
   group("parse refusals", [
     it("refuses an unknown returns form", fn() {
       // Act
-      let hints = refused("select 1\n-- returns: all User")
+      let hints = refused("-- a comment\n-- returns: all User")
 
       // Assert
       hints

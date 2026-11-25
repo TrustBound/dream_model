@@ -1,7 +1,7 @@
 %% Helpers for the generator and the command: the SHA-256 hash of the
 %% schema fingerprint, the command line, programs and the environment.
 -module(dream_model_ffi).
--export([sha256_hex/1, arguments/0, run/3, get_env/1]).
+-export([sha256_hex/1, arguments/0, run/3, read_environment_variable/1]).
 
 %% The SHA-256 hash of a text, as 64 lowercase hexadecimal digits.
 sha256_hex(Text) ->
@@ -31,7 +31,7 @@ collect(Port, Output) ->
             {Status, iolist_to_binary(lists:reverse(Output))}
     end.
 
-get_env(Name) ->
+read_environment_variable(Name) ->
     case os:getenv(binary_to_list(Name)) of
         false -> {error, nil};
         Value -> {ok, unicode:characters_to_binary(Value)}

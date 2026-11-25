@@ -497,7 +497,29 @@ fn parameter_tests(version: Int) {
         problem(
           "find.sql",
           1,
-          "the parameter name 'db' is the name that the generated function gives its connection or a module; choose another name",
+          "the parameter name 'db' is a name that the generated function uses itself: its connection, a module, a helper or a decoder; choose another name",
+        ),
+      ],
+    ),
+    #(
+      "refuses a params name of a helper",
+      "-- params: many_rows\nselect id from users where id = $1",
+      [
+        problem(
+          "find.sql",
+          1,
+          "the parameter name 'many_rows' is a name that the generated function uses itself: its connection, a module, a helper or a decoder; choose another name",
+        ),
+      ],
+    ),
+    #(
+      "refuses a params name of a decoder",
+      "\n-- params: user_decoder\nselect id from users where id = $1",
+      [
+        problem(
+          "find.sql",
+          2,
+          "the parameter name 'user_decoder' is a name that the generated function uses itself: its connection, a module, a helper or a decoder; choose another name",
         ),
       ],
     ),

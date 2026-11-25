@@ -11,8 +11,8 @@ import gleam/list
 import gleam/result
 import gleam/string
 
-@external(erlang, "dream_model_test_ffi", "get_env")
-fn get_env(name: String) -> Result(String, Nil)
+@external(erlang, "dream_model_test_ffi", "read_environment_variable")
+fn read_environment_variable(name: String) -> Result(String, Nil)
 
 /// The versions that the tests run on when the variable is not set.
 pub const default_versions = [16, 17, 18, 19]
@@ -22,7 +22,7 @@ pub const default_database = "dream_test"
 
 /// Returns the versions from `DREAM_MODEL_TEST_VERSIONS`, or the default.
 pub fn versions() -> List(Int) {
-  get_env("DREAM_MODEL_TEST_VERSIONS")
+  read_environment_variable("DREAM_MODEL_TEST_VERSIONS")
   |> result.map(fn(text) {
     string.split(text, " ")
     |> list.filter_map(int.parse)

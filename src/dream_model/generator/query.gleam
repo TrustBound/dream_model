@@ -97,9 +97,23 @@ pub type Model {
   )
 }
 
-/// Names that a parameter cannot take, because the generated function
-/// uses them itself.
-pub const reserved_argument_names = ["db", "client", "decode"]
+/// Names that a parameter cannot take, because the body of the generated
+/// function uses them: the connection, the modules and the helpers. A name
+/// that ends in `_decoder` is refused too, as the decoders of the module
+/// have such names.
+pub const reserved_argument_names = [
+  "db", "client", "decode", "one_row", "single_row", "maybe_row", "optional_row",
+  "many_rows", "no_rows", "query_error_to_error", "unique_message",
+  "schema_fingerprint",
+]
+
+/// The end of the name of each decoder of a generated module.
+const decoder_suffix = "_decoder"
+
+fn is_reserved_argument_name(argument_name: String) -> Bool {
+  list.contains(reserved_argument_names, argument_name)
+  || string.ends_with(argument_name, decoder_suffix)
+}
 
 /// Names that a record field cannot take, because the generated decoder
 /// uses them itself.
@@ -724,7 +738,8 @@ fn names_from_hint(
   names: List(String),
   count: Int,
 ) -> Result(List(String), List(Problem)) {
-  let line = option.unwrap(context.hints.params_line, context.statement_line)
+  let line =
+    option.unwrap(context.hints.parameters_line, context.statement_line)
   let problem = fn(message) { Problem(file: context.file, line:, message:) }
   let checked =
     list.map(names, fn(hinted) {
@@ -766,14 +781,14 @@ fn check_hinted_name(
   problem: fn(String) -> Problem,
 ) -> Result(String, Problem) {
   let is_valid = name.to_value_name(argument_name) == Ok(argument_name)
-  let is_reserved = list.contains(reserved_argument_names, argument_name)
+  let is_reserved = is_reserved_argument_name(argument_name)
   case is_valid, is_reserved {
     True, False -> Ok(argument_name)
     True, True ->
       Error(problem(
         "the parameter name '"
         <> argument_name
-        <> "' is the name that the generated function gives its connection or a module; choose another name",
+        <> "' is a name that the generated function uses itself: its connection, a module, a helper or a decoder; choose another name",
       ))
     False, _ ->
       Error(problem(
@@ -873,8 +888,7 @@ fn name_after_column(
   problem: fn(String) -> Problem,
 ) -> Result(String, Problem) {
   let argument_name = name.to_value_name(column)
-  let is_reserved =
-    list.contains(reserved_argument_names, result.unwrap(argument_name, ""))
+  let is_reserved = is_reserved_argument_name(result.unwrap(argument_name, ""))
   case argument_name, is_reserved {
     Ok(argument_name), False -> Ok(argument_name)
     Ok(argument_name), True ->

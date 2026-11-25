@@ -40,7 +40,7 @@ fn run_program(
 
 pub fn tests(version: Int) -> TestSuite {
   let url = servers.url(version, model_database.e2e_database)
-  let get_env = fn(name) {
+  let read_environment_variable = fn(name) {
     case name == url_variable {
       True -> Ok(url)
       False -> Error(Nil)
@@ -53,7 +53,8 @@ pub fn tests(version: Int) -> TestSuite {
         before_all(fn() { prepare(version) }),
         it("--check lists every module as missing before generation", fn() {
           // Act
-          let outcome = command.run(["--check"], copy, get_env)
+          let outcome =
+            command.run(["--check"], copy, read_environment_variable)
 
           // Assert
           outcome
@@ -66,7 +67,7 @@ pub fn tests(version: Int) -> TestSuite {
         }),
         it("writes the three modules", fn() {
           // Act
-          let outcome = command.run([], copy, get_env)
+          let outcome = command.run([], copy, read_environment_variable)
 
           // Assert
           outcome
@@ -98,7 +99,8 @@ pub fn tests(version: Int) -> TestSuite {
       [
         it("--check passes after the generation", fn() {
           // Act
-          let outcome = command.run(["--check"], copy, get_env)
+          let outcome =
+            command.run(["--check"], copy, read_environment_variable)
 
           // Assert
           outcome
@@ -116,7 +118,8 @@ pub fn tests(version: Int) -> TestSuite {
           let assert Ok(Nil) = simplifile.write(path, text <> "\n// edited\n")
 
           // Act
-          let outcome = command.run(["--check"], copy, get_env)
+          let outcome =
+            command.run(["--check"], copy, read_environment_variable)
           let assert Ok(Nil) = simplifile.write(path, text)
 
           // Assert

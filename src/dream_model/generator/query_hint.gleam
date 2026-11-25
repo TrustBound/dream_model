@@ -13,8 +13,10 @@
 ////
 //// The NULL hints (`not null`, `nullable`, `params`) are read by
 //// `dream_model/nullability/hint`; this module only keeps their line
-//// numbers for messages. Keys do not depend on case, as there.
+//// numbers for messages. Keys do not depend on case, as there. As there,
+//// only the comment block at the top of the file counts.
 
+import dream_model/nullability/hint
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -69,7 +71,7 @@ pub type QueryHints {
     not_found: Option(NotFoundHint),
     unique: List(UniqueHint),
     /// The line of the last `-- params:` hint.
-    params_line: Option(Int),
+    parameters_line: Option(Int),
     /// Each name of the `-- not null:` and `-- nullable:` lines, with its
     /// line.
     column_names: List(NamedLine),
@@ -88,7 +90,7 @@ type Line {
 /// Reads the model hints of a SQL text. Returns every refused hint line.
 pub fn parse(sql: String) -> Result(QueryHints, List(HintError)) {
   let lines =
-    string.split(sql, "\n")
+    hint.leading_lines(sql)
     |> list.index_map(fn(text, index) { read_line(text, index + 1) })
     |> result.values
   let empty =
@@ -96,7 +98,7 @@ pub fn parse(sql: String) -> Result(QueryHints, List(HintError)) {
       returns: None,
       not_found: None,
       unique: [],
-      params_line: None,
+      parameters_line: None,
       column_names: [],
     )
   let #(hints, errors) = list.fold(lines, #(empty, []), add_line)
@@ -159,7 +161,7 @@ fn add_line(
   let added = case string.lowercase(line.key) {
     "returns" -> add_returns(hints, line)
     "not found" -> add_not_found(hints, line)
-    "params" -> Ok(QueryHints(..hints, params_line: Some(line.number)))
+    "params" -> Ok(QueryHints(..hints, parameters_line: Some(line.number)))
     "not null" | "nullable" -> Ok(add_column_names(hints, line))
     "unique" ->
       Error(

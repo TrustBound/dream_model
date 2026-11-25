@@ -43,6 +43,28 @@ fn make_unit(
   Unit(model: model_info, folder:, queries: list.reverse(queries))
 }
 
+fn refused_names_case(
+  version: Int,
+  name: String,
+  module: String,
+  files: List(#(String, String)),
+  expected: List(query.Problem),
+) {
+  it(name, fn() {
+    // Arrange
+    let unit = make_unit(version, module, files)
+
+    // Act
+    let text = model.render(unit, "abc")
+
+    // Assert
+    text
+    |> should
+    |> be_equal(Error(expected))
+    |> or_fail_with("Expected the refused names")
+  })
+}
+
 const find_user = #(
   "find.sql",
   "-- returns: one User\nselect id, email, nickname from users where id = $1",
@@ -397,6 +419,51 @@ fn render_tests(version: Int) {
       )
       |> or_fail_with("Expected the refused field")
     }),
+    refused_names_case(
+      version,
+      "refuses a type name that the module imports",
+      "app/models/user",
+      [#("find.sql", "-- returns: one Error\nselect id, email from users")],
+      [
+        Problem(
+          "src/app/models/user/find.sql",
+          1,
+          "the type name 'Error' is a type or a constructor of the Gleam prelude or of an import of the generated module; write another type name in the 'returns' hint, for example 'returns: one ErrorRow', or rename the model folder",
+        ),
+      ],
+    ),
+    refused_names_case(
+      version,
+      "refuses the type name of a folder named list",
+      "app/models/list",
+      [#("all.sql", "\n-- returns: many\nselect id, email from users")],
+      [
+        Problem(
+          "src/app/models/list/all.sql",
+          2,
+          "the type name 'List' is a type or a constructor of the Gleam prelude or of an import of the generated module; write another type name in the 'returns' hint, for example 'returns: one ListRow', or rename the model folder",
+        ),
+      ],
+    ),
+    refused_names_case(
+      version,
+      "refuses two types that would get one decoder name",
+      "app/models/post",
+      [
+        #("local.sql", "-- returns: many UserUser\nselect id, email from users"),
+        #(
+          "imported.sql",
+          "-- returns: many app/models/user.User\nselect id, email, nickname from users",
+        ),
+      ],
+      [
+        Problem(
+          "src/app/models/post/imported.sql",
+          1,
+          "the types UserUser and user.User would both get the decoder user_user_decoder; rename one of the types",
+        ),
+      ],
+    ),
     it("string_literal escapes quotes and backslashes", fn() {
       // Act
       let text = model.string_literal("a \"b\" \\c")

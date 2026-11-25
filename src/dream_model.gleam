@@ -69,8 +69,8 @@ import dream_model/command
 @external(erlang, "dream_model_ffi", "arguments")
 fn arguments() -> List(String)
 
-@external(erlang, "dream_model_ffi", "get_env")
-fn get_env(name: String) -> Result(String, Nil)
+@external(erlang, "dream_model_ffi", "read_environment_variable")
+fn read_environment_variable(name: String) -> Result(String, Nil)
 
 @external(erlang, "erlang", "halt")
 fn halt(status: Int) -> Nil
@@ -88,5 +88,5 @@ fn halt(status: Int) -> Nil
 /// gleam run -m dream_model
 /// ```
 pub fn main() -> Nil {
-  command.main(arguments(), ".", get_env, halt)
+  command.main(arguments(), ".", read_environment_variable, halt)
 }

@@ -7,7 +7,8 @@
 import dream_model/generator/gleam_type.{
   type GleamType, IntType, StringType, TimestampType,
 }
-import dream_model/generator/query.{Model, RecordOutput}
+import dream_model/generator/model.{Unit}
+import dream_model/generator/query.{Model, Problem, RecordOutput}
 import dream_model/nullability
 import dream_model/nullability/reason.{type ColumnReason, type ParameterReason}
 import dream_test/matchers.{be_equal, or_fail_with, should}
@@ -45,6 +46,7 @@ pub fn tests(version: Int) -> TestSuite {
           |> list.map(why_option_test(version, _)),
       ),
       group("types.md", list.map(type_cases(), type_test(version, _))),
+      group("hints.md", hint_tests(version)),
     ],
   )
 }
@@ -301,6 +303,81 @@ fn why_option_cases(version: Int) -> List(#(String, Int, Decisions)) {
         #(2, False, reason.RowLevelSecurity),
       ]),
     ),
+    #(
+      "parameter_rule.sql",
+      16,
+      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
+        #(1, False, reason.RuleAddsQueries(2)),
+        #(2, False, reason.RuleAddsQueries(2)),
+      ]),
+    ),
+    #(
+      "parameter_cast_domain.sql",
+      16,
+      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
+        #(1, False, reason.ColumnIsNotNull),
+        #(2, False, reason.CastToNotNullDomain),
+      ]),
+    ),
+    #(
+      "parameter_cast_domain_check.sql",
+      16,
+      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
+        #(1, False, reason.ColumnIsNotNull),
+        #(2, False, reason.CastToDomainWithCheck),
+      ]),
+    ),
+    #(
+      "parameter_generated.sql",
+      16,
+      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
+        #(1, False, reason.ColumnIsNotNull),
+        #(2, False, reason.GeneratedColumnUsesIt),
+      ]),
+    ),
+    #(
+      "parameter_partition_key.sql",
+      16,
+      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
+        #(1, False, reason.ColumnIsNotNull),
+        #(2, False, reason.PartitionKey),
+      ]),
+    ),
+    #(
+      "parameter_check_option.sql",
+      16,
+      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
+        #(1, False, reason.ColumnIsNotNull),
+        #(2, False, reason.ViewCheckOption),
+      ]),
+    ),
+    #(
+      "parameter_view_trigger.sql",
+      16,
+      Decisions(
+        columns: [#("id", True, reason.RelationKindWithoutNotNull("v"))],
+        parameters: [
+          #(1, False, reason.RelationNotTable("v")),
+          #(2, False, reason.RelationNotTable("v")),
+        ],
+      ),
+    ),
+    #(
+      "parameter_whole_row_check.sql",
+      16,
+      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
+        #(1, False, reason.ColumnIsNotNull),
+        #(2, False, reason.CheckConstraint),
+      ]),
+    ),
+    #(
+      "foreign_child.sql",
+      16,
+      Decisions(
+        columns: [#("id", True, reason.RelationKindWithoutNotNull("f"))],
+        parameters: [],
+      ),
+    ),
   ]
 }
 
@@ -362,5 +439,74 @@ fn type_cases() -> List(#(String, List(#(String, GleamType, Bool)))) {
       #("id", IntType, False),
       #("span", StringType, True),
     ]),
+  ]
+}
+
+const hints_folder = "test/snippets/hints/"
+
+/// Each SQL file of hints.md that dream_model refuses, with the problems
+/// of the guide.
+fn hint_tests(version: Int) -> List(unit.UnitNode) {
+  [
+    it("reserved_type.sql gives the refusal of the guide", fn() {
+      // Arrange
+      let file = "src/app/models/user/find.sql"
+      let assert Ok(sql) = simplifile.read(hints_folder <> "reserved_type.sql")
+      let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+      let model_info = Model(module: "app/models/user", type_name: "User")
+
+      // Act
+      let #(found, analyzer) = query.analyze(analyzer, model_info, file, sql)
+      let _ = nullability.close(analyzer)
+      let assert Ok(found) = found
+      let rendered =
+        model.render(
+          Unit(model: model_info, folder: "src/app/models/user", queries: [
+            found,
+          ]),
+          "abc",
+        )
+
+      // Assert
+      rendered
+      |> should
+      |> be_equal(
+        Error([
+          Problem(
+            file,
+            1,
+            "the type name 'Error' is a type or a constructor of the Gleam prelude or of an import of the generated module; write another type name in the 'returns' hint, for example 'returns: one ErrorRow', or rename the model folder",
+          ),
+        ]),
+      )
+      |> or_fail_with("Expected the refusal of reserved_type.sql")
+    }),
+    it("reserved_parameter.sql gives the refusal of the guide", fn() {
+      // Arrange
+      let file = "src/app/models/user/after.sql"
+      let assert Ok(sql) =
+        simplifile.read(hints_folder <> "reserved_parameter.sql")
+      let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+      let model_info = Model(module: "app/models/user", type_name: "User")
+
+      // Act
+      let #(found, analyzer) = query.analyze(analyzer, model_info, file, sql)
+      let _ = nullability.close(analyzer)
+
+      // Assert
+      found
+      |> result.replace(Nil)
+      |> should
+      |> be_equal(
+        Error([
+          Problem(
+            file,
+            2,
+            "the parameter name 'many_rows' is a name that the generated function uses itself: its connection, a module, a helper or a decoder; choose another name",
+          ),
+        ]),
+      )
+      |> or_fail_with("Expected the refusal of reserved_parameter.sql")
+    }),
   ]
 }
