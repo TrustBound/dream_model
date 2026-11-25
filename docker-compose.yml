@@ -8,6 +8,13 @@
 # dream_model reads the query tree from a LOG notice, so each analyzed
 # statement writes its whole tree to the server log too. The log of each
 # container is capped, or a long test run fills the disk of Docker.
+#
+# The test databases are thrown away, so each server keeps its data in
+# memory (tmpfs) and never on Docker's disk, and turns off the settings that
+# make data survive a crash (fsync, synchronous_commit, full_page_writes).
+# Never use these settings for data you want to keep. The tmpfs is mounted
+# on the data volume of each image: /var/lib/postgresql/data up to
+# PostgreSQL 17, /var/lib/postgresql from 18.
 
 x-postgres: &postgres
   environment:
@@ -19,6 +26,14 @@ x-postgres: &postgres
     interval: 1s
     timeout: 5s
     retries: 30
+  command:
+    - postgres
+    - -c
+    - fsync=off
+    - -c
+    - synchronous_commit=off
+    - -c
+    - full_page_writes=off
   logging:
     driver: json-file
     options:
@@ -29,21 +44,29 @@ services:
   postgres-16:
     <<: *postgres
     image: postgres:16-alpine
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
     ports:
       - "5416:5432"
   postgres-17:
     <<: *postgres
     image: postgres:17-alpine
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
     ports:
       - "5417:5432"
   postgres-18:
     <<: *postgres
     image: postgres:18-alpine
+    tmpfs:
+      - /var/lib/postgresql:rw,size=2g
     ports:
       - "5418:5432"
   postgres-19:
     <<: *postgres
     image: postgres:19-alpine
+    tmpfs:
+      - /var/lib/postgresql:rw,size=2g
     ports:
       - "5419:5432"
   # PostgreSQL 15 is not supported. The tests use it only to check that
@@ -51,5 +74,7 @@ services:
   postgres-15:
     <<: *postgres
     image: postgres:15-alpine
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
     ports:
       - "5415:5432"
