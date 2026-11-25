@@ -28,8 +28,8 @@ dream_model opens its analysis connection with `debug_print_rewritten=on` and `c
 
 ## What dream_model Is Responsible For
 
-- **The URL**: dream_model reads the user, the password, the host, the port, the database and `sslmode` from the URL. It supports trust, cleartext, MD5 and SCRAM-SHA-256 authentication. `sslmode=verify-full` checks the certificate chain against the system CA certificates and the host name. `sslmode=require` uses TLS with no check of the certificate.
-- **Messages**: no message of dream_model holds the password of the URL.
+- **The URL**: dream_model reads the user, the password, the host, the port, the database and `sslmode` from the URL. It supports trust, cleartext, MD5 and SCRAM-SHA-256 authentication. It sends a cleartext password only over TLS, and it refuses a server that asks for more than 1,000,000 SCRAM iterations. The query string can hold only `sslmode`. `sslmode=verify-full` checks the certificate chain against the system CA certificates and the host name. `sslmode=require` uses TLS with no check of the certificate.
+- **Messages**: no message of dream_model holds the password of the URL. The user name and the password end at the last `@` before the path, and dream_model refuses an `@` after the host, so no part of them can get into the host of a message. A message of PostgreSQL itself can name the user, for example when the password is wrong.
 - **Generated code**: each generated function sends its arguments as parameters of the statement, never as SQL text. The error texts of a generated function hold no SQL, no parameter and no value of a row.
 
 ## What You're Responsible For

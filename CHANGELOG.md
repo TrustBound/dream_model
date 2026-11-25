@@ -35,6 +35,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The settings `database_url_variable` and `models` in
   `[tools.dream_model]` of `gleam.toml`.
 - Support for PostgreSQL 16, 17, 18 and 19.
+
+### Fixed after the review of 1.0.0
+- A rule that adds queries, for example `DO ALSO`, makes every parameter
+  required.
+- A cast of a parameter to a domain, and a parameter of a domain type,
+  must accept NULL for the parameter to be `Option`. This also holds
+  inside a length coercion.
+- A parameter is required when its column is in a partition key, when a
+  generated column uses the column, when the statement writes through a
+  view `WITH CHECK OPTION`, and when the target or one of its partitions
+  or child tables is not a table (a view with an `INSTEAD OF` trigger, a
+  foreign table).
+- A CHECK with a whole-row reference or with no column counts for every
+  column. The trigger rule reads row-level `BEFORE` and `INSTEAD OF`
+  triggers, the same bits as the fingerprint of dream_postgres.
+- A column of a foreign child table or partition is `Option`.
+- Hints come only from the comment block at the top of the file.
+- The tables of a module include each view that its statements read, so
+  a changed view definition changes the fingerprint. The fingerprint of
+  dream_postgres also holds `INSTEAD OF` row triggers, the
+  `check_option` of views and the expression of generated columns.
+- The generator refuses a type name of the Gleam prelude or of an
+  import, two types with one decoder name, and a parameter name of a
+  helper or a decoder.
+- Generation removes a stale module (its folder holds no `.sql` file),
+  and `--check` lists it. The command never overwrites a file without
+  the generated header line.
+- The URL: the password ends at the last `@`, an `@` after the host and
+  unknown query keys are refused, and no message holds the password.
+  A cleartext password needs TLS, and SCRAM computes at most 1,000,000
+  iterations. A connection that breaks in the middle of a response is
+  closed.
 - The guides: Getting started, Hints, Why is this column Option?, Types,
   Errors, CI and schema drift, and Command reference.
 
@@ -43,7 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failed, 100.0% line coverage (2104 of 2104 lines). The run took 4
   minutes 34 seconds of wall time, and the runner reports 6 minutes 38
   seconds of test time. Mode: one `gleam test` with the default
-  versions (16 to 19), the suites in parallel and the end-to-end suites
+  versions (16 to 19), the test groups in parallel and the end-to-end tests
   one at a time, with the fuzz tests (seeds 101, 202 and 303) and the
   sqlc corpus test. Machine: Apple M1 Max, 10 cores, 64 GB, macOS
   26.5.1, OTP 29, Gleam 1.19.2.

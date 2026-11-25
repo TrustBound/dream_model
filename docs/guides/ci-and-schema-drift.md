@@ -49,7 +49,7 @@ pub const schema_fingerprint =
   client.SchemaFingerprint(
     module: "app/models/user",
     tables: ["public.users"],
-    hash: "9ef9c55238941f66bb5daf2bf6b7c2cc8fc35a74470c3e0d9ba0796b0cb38016",
+    hash: "c647a49b7456744923f77bccaff712d442b9958e0250cb2ac35a1d668f843e65",
   )
 ```
 
@@ -83,19 +83,19 @@ Each line after the first one names a module, its tables, the expected fingerpri
 
 The fingerprint is the SHA-256 hash of the catalog facts that the NULL rules of dream_model read, for the tables, their child tables and their partitions:
 
-- The kind of the relation, row-level security, a BEFORE row trigger, the partition key and the partition bound
+- The kind of the relation, row-level security, a BEFORE row trigger, an INSTEAD OF row trigger, the `check_option` of a view, the partition key and the partition bound
 - The parents of the table
-- Each column: its name, its type, NOT NULL, a default, and its identity and generated kind
+- Each column: its name, its position, its type, NOT NULL, a default, its identity and generated kind, and the expression of a generated column
 - Each constraint: its kind, its name, if it is validated, and its definition
 - Each policy, and each domain and enum type that a column uses
 
-`client.schema_fingerprint_sql` of dream_postgres is the full list. The fingerprint does not change when only OIDs or the order of the columns change. A table that does not exist gives a fingerprint too, so a dropped table also stops the app.
+The tables of a module are each table and view that its statements read or write, with the tables that each view reads, and each child table and partition. `client.schema_fingerprint_sql` of dream_postgres is the full list of facts. The fingerprint does not change when only OIDs change. It changes when the order of the columns changes, because the generated decoders read the columns by position. A table that does not exist gives a fingerprint too, so a dropped table also stops the app.
 
 A change that does not change the generated code can still change the fingerprint, for example a new CHECK constraint. The start-up check then stops the app, and a new generation writes a new hash.
 
 ## Use the production major version
 
-The fingerprint of one schema is different on PostgreSQL 16, on 17, and on 18 and newer. PostgreSQL 17 and newer keep the NOT NULL of a domain as a constraint, and PostgreSQL 18 and newer keep the NOT NULL of a column as a constraint. So a module that you generate on PostgreSQL 17 does not match a PostgreSQL 18 database, also when the schema is the same.
+The fingerprint of one schema is different on PostgreSQL 16, on 17, and on 18 and newer. PostgreSQL 17 and newer keep the NOT NULL of a domain as a constraint, and PostgreSQL 18 and newer keep the NOT NULL of a column as a constraint. So a module that you generate on PostgreSQL 17 does not match a PostgreSQL 18 database, also when the schema is the same. Also, `--check` on PostgreSQL 18 fails for modules that you generated on PostgreSQL 16. This is by design: generate and check on the major version that production uses.
 
 - Generate the modules against the major version that production uses.
 - Run `--check` in CI against that major version. `--check` compares the whole module, with the hash.

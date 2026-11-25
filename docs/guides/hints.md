@@ -11,12 +11,13 @@ A `.sql` file can start with comment lines that tell dream_model what the genera
 - [not null](#not-null)
 - [nullable](#nullable)
 - [params](#params)
+- [Names that the module uses](#names-that-the-module-uses)
 - [Common pitfalls](#common-pitfalls)
 - [Where to go next](#where-to-go-next)
 
 ## How a hint looks
 
-A hint is a comment line at the top of the file, before the statement: `-- key: value`. The keys do not depend on case. A comment line with another key is a plain comment. dream_model refuses a second `returns` or `not found` hint, with a message that names the file and the line. A later `params` line replaces an earlier one.
+A hint is a comment line at the top of the file, before the statement: `-- key: value`. Only the comment block at the top counts: the `--` lines and the blank lines before the first other line. A `--` line after the start of the statement is a plain comment, also when it looks like a hint. The keys do not depend on case. A comment line with another key is a plain comment. dream_model refuses a second `returns` or `not found` hint, with a message that names the file and the line. A later `params` line replaces an earlier one.
 
 | Hint | Effect |
 | --- | --- |
@@ -426,9 +427,37 @@ order by id"
 
 Give a name with `params` when dream_model cannot find one, for example when a parameter is compared with two columns, or with no column.
 
+## Names that the module uses
+
+A generated module defines and imports some names itself. dream_model refuses a hint or a folder that gives one of these names to something else, because the module would not compile. The message names the file, the line and the name.
+
+- **A type name**: a type or constructor of the Gleam prelude (`Bool`, `Int`, `Float`, `String`, `BitArray`, `UtfCodepoint`, `List`, `Result`, `Nil`, `True`, `False`, `Ok`, `Error`) or a name that the module imports (`Error`, `Option`, `Some`, `None`). A model folder named `list`, `result`, `option` or `error` gives such a type name too.
+- **Two types with one decoder**: the decoder of a local type `UserUser` and the decoder of the imported type `user.User` are both `user_user_decoder`. Rename one of the types.
+- **A parameter name**: `db`, `client`, `decode`, a helper (`one_row`, `single_row`, `maybe_row`, `optional_row`, `many_rows`, `no_rows`, `query_error_to_error`, `unique_message`, `schema_fingerprint`), or a name that ends in `_decoder`.
+
+### A type name of an import <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/hints/reserved_type.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+-- returns: one Error
+select id, email from users where id = $1
+```
+
+dream_model refuses it: `the type name 'Error' is a type or a constructor of the Gleam prelude or of an import of the generated module; write another type name in the 'returns' hint, for example 'returns: one ErrorRow', or rename the model folder`.
+
+### A parameter name of a helper <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/hints/reserved_parameter.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+-- returns: many
+-- params: many_rows
+select email from users where id > $1
+```
+
+dream_model refuses it on line 2: `the parameter name 'many_rows' is a name that the generated function uses itself: its connection, a module, a helper or a decoder; choose another name`.
+
 ## Common pitfalls
 
-- **A hint after the statement.** dream_model reads only the comment lines before the statement.
+- **A hint after the statement.** dream_model reads only the comment block at the top of the file. A `-- params:` or `-- nullable:` line after the first line of the statement changes nothing.
+- **A name that the generated module uses.** See [Names that the module uses](#names-that-the-module-uses).
 - **A `unique` hint on a SELECT.** A SELECT writes no table, so no unique constraint can fail.
 - **`not null` on a table column.** The schema decides a table column. Add a NOT NULL constraint to the column.
 - **`params` with too few names.** `params` names every parameter, in order.

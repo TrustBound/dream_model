@@ -43,11 +43,11 @@ pub fn find(db: client.Connection, id: Int) -> Result(User, Error) {
 
 ### The NULL rules
 
-A result column is `Option` unless a rule proves that it is never NULL: a NOT NULL table column that no outer join or grouping set can empty, `count(...)`, `coalesce(...)` with a last argument that is never NULL, `EXISTS`, `IS NULL`, `IS DISTINCT FROM` and constants. A parameter is `Option` only when the statement stores it straight into a column that accepts NULL in every case: no NOT NULL, domain rule, CHECK, partition rule, BEFORE trigger or row-level security. A built-in length coercion around the parameter, such as the one of a `varchar(10)` column, keeps the store straight.
+A result column is `Option` unless a rule proves that it is never NULL: a NOT NULL table column that no outer join or grouping set can empty, `count(...)`, `coalesce(...)` with a last argument that is never NULL, `EXISTS`, `IS NULL`, `IS DISTINCT FROM` and constants. A parameter is `Option` only when the statement stores it straight into a column that accepts NULL in every case: no NOT NULL, domain rule, CHECK, partition rule, partition key, generated column that uses it, BEFORE trigger, row-level security or view `WITH CHECK OPTION`, and a target whose partitions and child tables are all tables. A cast of the parameter to a domain must accept NULL too. A rule that adds queries, such as `DO ALSO`, makes every parameter required. A built-in length coercion around the parameter, such as the one of a `varchar(10)` column, keeps the store straight. A column of a foreign child table is `Option`.
 
 ### Hints
 
-`returns`, `not found`, `unique`, `not null`, `nullable` and `params`. A `unique` hint is refused at generation time when another index or constraint of the database has the same name, because PostgreSQL names a violation only by its constraint name.
+`returns`, `not found`, `unique`, `not null`, `nullable` and `params`, in the comment block at the top of a file. A type name or a parameter name that the generated module uses itself is refused with the file and the line. A `unique` hint is refused at generation time when another index or constraint of the database has the same name, because PostgreSQL names a violation only by its constraint name.
 
 ### Arrays and infinity
 
@@ -61,7 +61,7 @@ An array is `List(Option(T))`, because PostgreSQL never forbids a NULL element. 
 
 ### CI and schema drift
 
-`--check` exits with status 1 when a module is missing or differs from its `.sql` files. Each module holds `schema_fingerprint`. Give the fingerprints to `client.check_schema` of dream_postgres when the app starts:
+`--check` exits with status 1 when a module is missing, differs from its `.sql` files, or is stale because its folder holds no `.sql` file. Generation removes a stale module and never overwrites a file without the generated header line. Generate and check on the major version of PostgreSQL that production uses: the fingerprint differs between 16, 17, and 18 and newer. Each module holds `schema_fingerprint`. Give the fingerprints to `client.check_schema` of dream_postgres when the app starts:
 
 #### Compare the models with the database <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/startup.gleam#L10-L18"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -88,9 +88,14 @@ pub fn check_models(db: client.Connection) -> Result(Nil, String) {
 
 This is the first release. Add it as a dev dependency:
 
-```sh
-gleam add --dev dream_model
+### The dev dependency of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L13-L14"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```toml
+[dev-dependencies]
+dream_model = ">= 1.0.0 and < 2.0.0"
 ```
+
+`gleam add --dev dream_model` writes this line.
 
 ### Migration Guide
 

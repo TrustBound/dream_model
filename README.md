@@ -38,9 +38,14 @@ dream_model is a tool for development time. Your app does not run it. The genera
 
 dream_model is a dev dependency. Your app needs `dream` and `dream_postgres` at run time.
 
-```sh
-gleam add --dev dream_model
+### The dev dependency of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L13-L14"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-dev-dependency-of-the-end-to-end-app-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+
+```toml
+[dev-dependencies]
+dream_model = ">= 1.0.0 and < 2.0.0"
 ```
+
+`gleam add --dev dream_model` writes this line.
 
 dream_model needs PostgreSQL 16 or newer, and the `gleam` program on the `PATH` to format the modules.
 

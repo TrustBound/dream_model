@@ -110,6 +110,18 @@ select email from mv_users
 
 Read the table of the view, or promise the column with `-- not null: email`.
 
+### relation kind f does not enforce NOT NULL
+
+A child table or a partition that the query reads is a foreign table (`f`). PostgreSQL does not enforce NOT NULL on a foreign table, so its rows can hold NULL in a column that the parent makes NOT NULL. Here `fparent` has `id` NOT NULL, and its child `fchild` is a foreign table of `postgres_fdw`.
+
+#### A foreign child table <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/foreign_child.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+select id from fparent
+```
+
+Make the remote column NOT NULL and promise nothing, or read `only fparent`.
+
 ### recursive CTE
 
 The column comes from a recursive CTE.
@@ -291,7 +303,7 @@ returning id
 
 ### a CHECK constraint on this column may reject NULL
 
-A CHECK constraint of the table names the column.
+A CHECK constraint of the table names the column. A CHECK with a whole-row reference, or with no column, counts for every column.
 
 #### A column with a CHECK <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_check.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -299,6 +311,15 @@ A CHECK constraint of the table names the column.
 insert into checked (id, code) values ($1, $2)
 returning id
 ```
+
+#### A whole-row CHECK <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_whole_row_check.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+insert into whole_checked (id, note) values ($1, $2)
+returning id
+```
+
+The table `whole_checked` has `check (whole_checked is not null)`. It names no column, and it rejects NULL in `note`.
 
 ### a partition or child table makes this column NOT NULL
 
@@ -324,7 +345,7 @@ returning id
 
 ### a BEFORE trigger on the table can reject any value
 
-A BEFORE trigger on the table can reject the row or change it. dream_model cannot read what the trigger does.
+A row-level BEFORE trigger on the table, or on one of its partitions or child tables, can reject the row or change it. dream_model cannot read what the trigger does. A statement-level trigger cannot see the row, so it does not count.
 
 #### A table with a BEFORE trigger <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_trigger.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -345,6 +366,89 @@ The table has row-level security, or a policy with WITH CHECK.
 insert into secured (id, note) values ($1, $2)
 returning id
 ```
+
+### a rule rewrites the statement into 2 queries, so every parameter is required
+
+A rule of the table adds queries to the statement, for example a `DO ALSO` rule. The added queries can use each parameter anywhere, and dream_model does not trace them. So each parameter is required. The number is the count of queries after the rewrite. Here the rule `log_note` copies `note` into `log.note`, which is NOT NULL.
+
+#### A table with a DO ALSO rule <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_rule.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+insert into logged (id, note) values ($1, $2)
+returning id
+```
+
+If the rule accepts NULL, mark the parameter with `-- params: id, note?`.
+
+### the parameter is cast to a NOT NULL domain type
+
+The parameter goes through a cast to a domain that is NOT NULL on its way to the column, or the type of the parameter is such a domain. The cast rejects NULL, also when the column accepts NULL.
+
+#### A cast to a NOT NULL domain <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_cast_domain.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+insert into notes (id, plain_text) values ($1, $2::strict_text)
+returning id
+```
+
+Remove the cast, or cast to the base type.
+
+### the parameter is cast to a domain type with a CHECK constraint that may reject NULL
+
+The parameter goes through a cast to a domain with a CHECK. A CHECK can reject NULL.
+
+#### A cast to a domain with a CHECK <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_cast_domain_check.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+insert into notes (id, plain_text) values ($1, $2::text::checked_text)
+returning id
+```
+
+### a generated column is computed from this column and may reject NULL
+
+A generated column of the table uses the column. The generated column can be NOT NULL or have a CHECK, so NULL in the column can make the row fail. Here `b` is `upper(a)` and NOT NULL.
+
+#### A column that a generated column uses <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_generated.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+insert into gen_from (id, a) values ($1, $2)
+returning id
+```
+
+### the column is in a partition key, and a NULL may find no partition
+
+The column is part of the partition key of the table or of one of its partitions. A NULL key finds no partition unless a partition takes NULL. An expression in a key counts for every column.
+
+#### A partition key column <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_partition_key.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+insert into keyed (id, kind) values ($1, $2)
+returning id
+```
+
+### a view's WITH CHECK OPTION may reject the row
+
+The statement writes through a view with `WITH CHECK OPTION`. The condition of the view can reject a row with NULL. Here `wco_view` has `where note is not null`.
+
+#### A view WITH CHECK OPTION <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_check_option.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+insert into wco_view (id, note) values ($1, $2)
+returning id
+```
+
+### the statement writes into relation kind v (a view with an INSTEAD OF trigger or a foreign table), which may reject NULL
+
+The statement writes into a relation that is not a table: a view with an `INSTEAD OF` trigger (`v`), or a foreign table (`f`). A partition or a child table that is a foreign table gives the same reason for its kind. dream_model cannot read what the trigger or the remote server accepts, so each stored parameter is required.
+
+#### A view with an INSTEAD OF trigger <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/why_option/parameter_view_trigger.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```sql
+insert into iot_view (id, note) values ($1, $2)
+returning id
+```
+
+If the trigger accepts NULL, mark the parameter with `-- params: id, note?`.
 
 ## Reasons that no query gives
 
