@@ -226,7 +226,9 @@ mutant "grouping-expression hazard" "16" "$rules" \
   'case is_grouping_expression(query, expression) {' \
   'case False {'
 
-mutant "inheritance child tables" "16" "$rules" \
+# Before PostgreSQL 18 a child table cannot drop an inherited NOT NULL, so
+# only NOT NULL ... NO INHERIT (18 and newer) makes a child column nullable.
+mutant "inheritance child tables" "18" "$rules" \
   'True -> [oid, ..relation.descendants]' \
   'True -> [oid]'
 
