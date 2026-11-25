@@ -1,0 +1,32 @@
+| check_schema: Ok(Nil)
+| user.create: Ok(User(1, "ann@example.com", Some("Ann")))
+| user.create of a taken email: 409 Email already taken
+| user.create without a nickname: Ok(User(3, "bob@example.com", None))
+| user.find: Ok(User(1, "ann@example.com", Some("Ann")))
+| user.find of a missing user: 404 User not found
+| user.count: Ok(2)
+| user.find_by_email: Ok(Some(User(3, "bob@example.com", None)))
+| user.find_by_email of no user: Ok(None)
+| user.list: Ok([User(1, "ann@example.com", Some("Ann")), User(3, "bob@example.com", None)])
+| user.search: Ok([User(1, "ann@example.com", Some("Ann")), User(3, "bob@example.com", None)])
+| user.search with a nickname: Ok([User(1, "ann@example.com", Some("Ann"))])
+| user.rename: Ok(Nil)
+| user.find after rename: Ok(User(3, "bob@example.com", Some("Bobby")))
+| user.rename to NULL: Ok(Nil)
+| user.find after rename to NULL: Ok(User(3, "bob@example.com", None))
+| user.created_at is a time after 2020: Ok(Gt)
+| user.delete: Ok(Nil)
+| user.find after delete: 404 User not found
+| post.create: Ok(Post(1, 1, "Hello", None, False))
+| post.publish: Ok(Some(True))
+| post.publish of a missing post: Ok(None)
+| post.authors: Ok([User(1, "ann@example.com", Some("Ann"))])
+| post.by_user: Ok([Post(1, 1, "Hello", None, True)])
+| post.titles: Ok([Some("Hello")])
+| post.total: Ok(1)
+| post.total of a user with no posts: 500 the SQL file src/app/models/post/total.sql promised the column total is never NULL, and PostgreSQL returned NULL
+| sample.insert: Ok(1)
+| sample.get: Ok(Sample(1, Some(7), Some(9000000000), Some(42), Some(1.5), Some(2.25), Some(12.5), Some("first"), Some("abc"), Some("short"), Some("Mixed"), Some("{\"a\": 1}"), Some("{\"b\": [1, 2]}"), Some("happy"), Some(True), Some("\u{0001}\u{0002}\u{0003}"), Some("\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0000}\u{0001}"), Some(Timestamp(1709212455, 0)), Some(Timestamp(1709212455, 0)), Some(Date(2024, February, 29)), Some(TimeOfDay(13, 14, 15, 0)), Some(["a", "b"]), Some([1, 2]), Some(5)))
+| timestamp round trip: Ok(True)
+| sample.insert of a taken label: 409 Label already taken
+| user.delete of a user with posts: 500 user.delete failed

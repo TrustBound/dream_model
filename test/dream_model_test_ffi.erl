@@ -2,7 +2,26 @@
 %% server that follows a script, for the protocol cases that a real server
 %% never sends.
 -module(dream_model_test_ffi).
--export([get_env/1, start_fake_server/1]).
+-export([get_env/1, start_fake_server/1, run/4]).
+
+%% Runs a program found on the PATH in a folder, with more environment
+%% variables, and returns its exit status and its output.
+run(Program, Arguments, Directory, Environment) ->
+    Path = os:find_executable(unicode:characters_to_list(Program)),
+    Port = open_port({spawn_executable, Path},
+                     [{args, [unicode:characters_to_list(A) || A <- Arguments]},
+                      {cd, unicode:characters_to_list(Directory)},
+                      {env, [{unicode:characters_to_list(K), unicode:characters_to_list(V)}
+                             || {K, V} <- Environment]},
+                      exit_status, binary, stderr_to_stdout, use_stdio, hide]),
+    collect(Port, []).
+
+collect(Port, Output) ->
+    receive
+        {Port, {data, Data}} -> collect(Port, [Data | Output]);
+        {Port, {exit_status, Status}} ->
+            {Status, iolist_to_binary(lists:reverse(Output))}
+    end.
 
 get_env(Name) ->
     case os:getenv(binary_to_list(Name)) of

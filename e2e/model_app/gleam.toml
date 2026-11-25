@@ -1,0 +1,20 @@
+# The app of the end-to-end tests of dream_model. The tests copy it to
+# build/e2e/model_app, generate its models there against each PostgreSQL
+# version, compare them with the models in src/app/models, and run
+# test/model_app_test.gleam against the database.
+name = "model_app"
+version = "1.0.0"
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+dream = ">= 3.0.0 and < 4.0.0"
+dream_postgres = ">= 2.1.0 and < 3.0.0"
+
+[dev-dependencies]
+dream_model = ">= 1.0.0 and < 2.0.0"
+# The checks of test/model_app_test.gleam make times. The generated models
+# do not import gleam_time.
+gleam_time = ">= 1.0.0 and < 2.0.0"
+
+[tools.dream_model]
+database_url_variable = "MODEL_APP_DATABASE_URL"

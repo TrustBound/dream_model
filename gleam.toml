@@ -14,6 +14,11 @@ links = [
 # any release.
 internal_modules = ["dream_model/postgres", "dream_model/postgres/*", "dream_model/nullability", "dream_model/nullability/*", "dream_model/generator", "dream_model/generator/*", "dream_model/command"]
 
+[documentation]
+pages = [
+    { title = "Getting started", path = "guides/getting-started.html", source = "./docs/guides/getting-started.md" },
+]
+
 [erlang]
 extra_applications = ["crypto", "ssl"]
 
@@ -31,4 +36,4 @@ dream_snippets = ">= 1.0.0 and < 2.0.0"
 
 [tools.dream_snippets]
 checked_from_version = "1.0.0"
-tested_files = ["test", ".github", "scripts", "gleam.toml", "docker-compose.yml"]
+tested_files = ["test", ".github", "scripts", "gleam.toml", "docker-compose.yml", "e2e"]

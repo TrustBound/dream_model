@@ -3,8 +3,9 @@
 # folders, so that the build and the tests run with no Hex request.
 #
 # dream_model needs dream_postgres 2.1.0, and the end-to-end app in
-# e2e/model_app needs dream_postgres 2.1.0 and Dream 3.0.0. manifest.toml and
-# e2e/model_app/manifest.toml already name these versions. Gleam does not
+# e2e/model_app needs dream_postgres 2.1.0, Dream 3.0.0 and dream_model
+# 1.0.0. manifest.toml and e2e/model_app/manifest.toml already name these
+# versions. Gleam does not
 # download a package that build/packages/packages.toml lists with the
 # version of the manifest, so this script copies each package and lists it.
 #
@@ -101,10 +102,16 @@ echo "Copied dream_postgres and its packages into build/packages"
 # The end-to-end app. The tests copy it to build/e2e/model_app and build it
 # there, so its packages go there too.
 e2e_packages="$root/build/e2e/model_app/build/packages"
-for name in gleam_stdlib gleam_erlang gleam_otp gleam_json gleam_time simplifile filepath; do
+for name in gleam_stdlib gleam_erlang gleam_otp gleam_json gleam_time simplifile filepath tom; do
   copy_package "$root/build/packages/$name" "$e2e_packages" "$name"
   list_package "$e2e_packages" "$name" "$(version_of_hex "$root/e2e/model_app" "$name")"
 done
 copy_dream_postgres "$e2e_packages"
 copy_dream "$e2e_packages"
-echo "Copied dream, dream_postgres and their packages into build/e2e/model_app/build/packages"
+# dream_model itself: the end-to-end tests copy its src again before each
+# run, so the app runs the code under test.
+rm -rf "$e2e_packages/dream_model"
+mkdir -p "$e2e_packages/dream_model"
+cp -R "$root/src" "$root/gleam.toml" "$e2e_packages/dream_model/"
+list_package "$e2e_packages" dream_model "$(version_of "$e2e_packages/dream_model")"
+echo "Copied dream, dream_postgres, dream_model and their packages into build/e2e/model_app/build/packages"

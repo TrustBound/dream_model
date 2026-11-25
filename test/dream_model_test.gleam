@@ -4,6 +4,8 @@
 //// that `DREAM_MODEL_TEST_VERSIONS` picks; the run stops with one message
 //// when that fails.
 
+import dream_model/command_test
+import dream_model/e2e_test
 import dream_model/generator/fingerprint_test
 import dream_model/generator/gleam_type_test
 import dream_model/generator/model_test
@@ -22,6 +24,7 @@ import dream_model/postgres/scram_test
 import dream_model/postgres/tree_test
 import dream_model/postgres/wire_test
 import dream_test/coverage
+import dream_test/parallel
 import dream_test/reporters/bdd
 import dream_test/reporters/progress
 import dream_test/runner
@@ -82,9 +85,17 @@ fn run_tests(versions: List(Int)) -> Nil {
         query_test.tests(version),
         fingerprint_test.tests(version),
         model_test.tests(version),
+        command_test.tests(version),
       ]
     })
+  // The end-to-end tests of one version share a copy of the app, so they
+  // run one at a time.
+  let e2e_suites = list.map(versions, e2e_test.tests)
   runner.new(list.append(unit_suites, version_suites))
+  |> runner.add_suites_with_config(
+    parallel.ParallelConfig(max_concurrency: 1, default_timeout_ms: 300_000),
+    e2e_suites,
+  )
   |> runner.default_timeout_ms(120_000)
   |> runner.progress_reporter(progress.new())
   |> runner.results_reporters([bdd.new()])

@@ -913,11 +913,15 @@ pub fn string_literal(text: String) -> String {
 
 /// Joins words as a sentence does: `a`, `a and b`, `a, b and c`.
 fn join_words(words: List(String)) -> String {
-  case list.reverse(words) {
-    [] -> ""
-    [only] -> only
-    [last, ..rest] -> string.join(list.reverse(rest), ", ") <> " and " <> last
-  }
+  let last = list.length(words) - 1
+  list.index_map(words, fn(word, index) {
+    case index {
+      0 -> word
+      _ if index == last -> " and " <> word
+      _ -> ", " <> word
+    }
+  })
+  |> string.concat
 }
 
 fn int_text(value: Int) -> String {

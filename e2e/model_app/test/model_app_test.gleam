@@ -1,0 +1,166 @@
+//// Runs the generated models against the database in
+//// MODEL_APP_DATABASE_URL and prints one line for each check, each line
+//// starting with `| `. The tests of dream_model compare the lines with
+//// expected_output.txt.
+
+import app/models/post
+import app/models/sample
+import app/models/user
+import dream/http/error.{type Error}
+import dream_postgres/client
+import gleam/int
+import gleam/io
+import gleam/option.{None, Some}
+import gleam/result
+import gleam/string
+import gleam/time/calendar
+import gleam/time/timestamp
+
+@external(erlang, "model_app_ffi", "get_env")
+fn get_env(name: String) -> Result(String, Nil)
+
+pub fn main() -> Nil {
+  let assert Ok(url) = get_env("MODEL_APP_DATABASE_URL")
+  let assert Ok(db) = client.from_url(url)
+  show(
+    "check_schema",
+    client.check_schema(db, [
+      user.schema_fingerprint,
+      post.schema_fingerprint,
+      sample.schema_fingerprint,
+    ]),
+  )
+  check_users(db)
+  check_posts(db)
+  check_samples(db)
+  show_error("user.delete of a user with posts", user.delete(db, 1))
+}
+
+fn show(label: String, value: a) -> Nil {
+  io.println("| " <> label <> ": " <> string.inspect(value))
+}
+
+fn show_error(label: String, value: Result(a, Error)) -> Nil {
+  let text = case value {
+    Ok(found) -> "Ok " <> string.inspect(found)
+    Error(found) ->
+      int.to_string(error.to_status_code(found)) <> " " <> error.message(found)
+  }
+  io.println("| " <> label <> ": " <> text)
+}
+
+fn check_users(db: client.Connection) -> Nil {
+  show("user.create", user.create(db, "ann@example.com", Some("Ann")))
+  show_error(
+    "user.create of a taken email",
+    user.create(db, "ANN@example.com", None),
+  )
+  show(
+    "user.create without a nickname",
+    user.create(db, "bob@example.com", None),
+  )
+  show("user.find", user.find(db, 1))
+  show_error("user.find of a missing user", user.find(db, 99))
+  show("user.count", user.count(db))
+  show("user.find_by_email", user.find_by_email(db, "BOB@example.com"))
+  show("user.find_by_email of no user", user.find_by_email(db, "nobody"))
+  show("user.list", user.list(db))
+  show("user.search", user.search(db, "%example.com", None))
+  show("user.search with a nickname", user.search(db, "%", Some("Ann")))
+  show("user.rename", user.rename(db, 3, Some("Bobby")))
+  show("user.find after rename", user.find(db, 3))
+  show("user.rename to NULL", user.rename(db, 3, None))
+  show("user.find after rename to NULL", user.find(db, 3))
+  show(
+    "user.created_at is a time after 2020",
+    user.created_at(db, 1)
+      |> result.map(fn(created) {
+        timestamp.compare(created, timestamp.from_unix_seconds(1_577_836_800))
+      }),
+  )
+  show("user.delete", user.delete(db, 3))
+  show_error("user.find after delete", user.find(db, 3))
+}
+
+fn check_posts(db: client.Connection) -> Nil {
+  show("post.create", post.create(db, 1, "Hello", None))
+  show("post.publish", post.publish(db, 1))
+  show("post.publish of a missing post", post.publish(db, 99))
+  show("post.authors", post.authors(db, True))
+  show("post.by_user", post.by_user(db, 1))
+  show("post.titles", post.titles(db))
+  show("post.total", post.total(db, 1))
+  show_error("post.total of a user with no posts", post.total(db, 2))
+}
+
+fn check_samples(db: client.Connection) -> Nil {
+  let happened_at =
+    timestamp.from_calendar(
+      calendar.Date(2024, calendar.February, 29),
+      calendar.TimeOfDay(13, 14, 15, 0),
+      calendar.utc_offset,
+    )
+  let inserted =
+    sample.insert(
+      db,
+      Some(7),
+      Some(9_000_000_000),
+      Some(42),
+      Some(1.5),
+      Some(2.25),
+      Some(12.5),
+      "first",
+      "abc",
+      Some("short"),
+      Some("Mixed"),
+      Some("{\"a\": 1}"),
+      Some("{\"b\": [1, 2]}"),
+      Some("happy"),
+      Some(True),
+      Some(<<1, 2, 3>>),
+      Some(<<0:size(120), 1>>),
+      Some(happened_at),
+      Some(happened_at),
+      Some(calendar.Date(2024, calendar.February, 29)),
+      Some(calendar.TimeOfDay(13, 14, 15, 0)),
+      Some(["a", "b"]),
+      Some([1, 2]),
+      5,
+    )
+  show("sample.insert", inserted)
+  show("sample.get", sample.get(db, 1))
+  show(
+    "timestamp round trip",
+    sample.get(db, 1)
+      |> result.map(fn(found) { found.happened_at == Some(happened_at) }),
+  )
+  show_error(
+    "sample.insert of a taken label",
+    sample.insert(
+      db,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      "first",
+      "xyz",
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      None,
+      1,
+    ),
+  )
+}

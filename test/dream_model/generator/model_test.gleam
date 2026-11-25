@@ -292,6 +292,25 @@ fn render_tests(version: Int) {
       |> be_equal(#(True, True))
       |> or_fail_with("Expected sum_decoder with the promise")
     }),
+    it("imports no decoder for a module with no result columns", fn() {
+      // Arrange
+      let unit =
+        make_unit(version, "app/models/post", [
+          #("delete.sql", "delete from posts where id = $1"),
+        ])
+
+      // Act
+      let text = model.render(unit, "abc") |> result.unwrap("")
+
+      // Assert
+      #(
+        string.contains(text, "import gleam/dynamic/decode"),
+        string.contains(text, "import gleam/result"),
+      )
+      |> should
+      |> be_equal(#(False, True))
+      |> or_fail_with("Expected gleam/result and no decode import")
+    }),
     it("refuses a function name that a helper uses", fn() {
       // Arrange
       let unit =
@@ -323,6 +342,7 @@ fn render_tests(version: Int) {
       // Arrange
       let unit =
         make_unit(version, "app/models/client", [
+          #("count.sql", "-- returns: one\nselect count(*) as total from users"),
           #(
             "authors.sql",
             "-- returns: many app/models/user.User\nselect id, email, nickname from users",
