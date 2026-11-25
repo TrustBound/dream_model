@@ -9,6 +9,13 @@ links = [
     { title = "GitHub", href = "https://github.com/TrustBound/dream_model" },
 ]
 
+# The modules under dream_model/postgres and dream_model/nullability are the
+# engine of the generator. Their API can change in any release.
+internal_modules = ["dream_model/postgres", "dream_model/postgres/*", "dream_model/nullability", "dream_model/nullability/*"]
+
+[erlang]
+extra_applications = ["crypto", "ssl"]
+
 [dependencies]
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 gleam_erlang = ">= 1.0.0 and < 2.0.0"
