@@ -5,17 +5,17 @@
 ////
 //// The counts of each run are in build/corpus-results/corpus-NN.json.
 
-import corpus/run
+import corpus/run.{summary, write_report}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
-import gleam/int
-import gleam/io
-import gleam/result
+import gleam/int.{to_string}
+import gleam/io.{println}
+import gleam/result.{map}
 
 /// The corpus test on one PostgreSQL version.
 pub fn tests(version: Int) -> TestSuite {
-  describe("sqlc corpus on PostgreSQL " <> int.to_string(version), [
+  describe("sqlc corpus on PostgreSQL " <> to_string(version), [
     it("finds no wrong never-NULL type and no analysis crash", fn() {
       // Arrange
       let version = version
@@ -23,9 +23,9 @@ pub fn tests(version: Int) -> TestSuite {
       // Act
       let findings =
         run.run(version)
-        |> result.map(fn(report) {
-          let _ = run.write_report(report)
-          io.println(run.summary(report))
+        |> map(fn(report) {
+          let _ = write_report(report)
+          println(summary(report))
           report.findings
         })
 
@@ -35,7 +35,7 @@ pub fn tests(version: Int) -> TestSuite {
       |> be_equal(Ok([]))
       |> or_fail_with(
         "Expected no findings in the sqlc corpus on PostgreSQL "
-        <> int.to_string(version),
+        <> to_string(version),
       )
     }),
   ])

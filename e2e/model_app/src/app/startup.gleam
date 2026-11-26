@@ -4,15 +4,15 @@
 import app/models/post
 import app/models/sample
 import app/models/user
-import dream_postgres/client
-import gleam/result
+import dream_postgres/client.{type Connection, check_schema, format_schema_check_error}
+import gleam/result.{map_error}
 
 /// Compares the schema fingerprint of each model with the database.
-pub fn check_models(db: client.Connection) -> Result(Nil, String) {
-  client.check_schema(db, [
+pub fn check_models(db: Connection) -> Result(Nil, String) {
+  check_schema(db, [
     user.schema_fingerprint,
     post.schema_fingerprint,
     sample.schema_fingerprint,
   ])
-  |> result.map_error(client.format_schema_check_error)
+  |> map_error(format_schema_check_error)
 }

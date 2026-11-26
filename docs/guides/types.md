@@ -242,7 +242,7 @@ pub fn tags(
 ) -> Result(Option(List(String)), Error(QueryError)) {
   "select tags from samples where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(at(
     [0],
     optional(promised_elements_not_null(

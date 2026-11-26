@@ -26,9 +26,9 @@
 //// and rows that do not match the rows of other tables.
 
 import fuzz/random.{type Random}
-import gleam/int
-import gleam/list
-import gleam/string
+import gleam/int.{to_string}
+import gleam/list.{append, filter, find, flat_map, flatten, fold, map, reverse}
+import gleam/string.{join}
 
 /// The type of a value.
 pub type Kind {
@@ -160,7 +160,7 @@ pub fn generate(random: Random, version: Int) -> #(Schema, Random) {
   }
   let #(tables, random) =
     random.numbers(0, count - 1)
-    |> list.fold(#([], random), fn(state, index) {
+    |> fold(#([], random), fn(state, index) {
       let #(tables, random) = state
       let shape = case index {
         _ if index == child_table -> WithChild
@@ -171,20 +171,18 @@ pub fn generate(random: Random, version: Int) -> #(Schema, Random) {
       let #(table, random) = generate_table(random, index, shape, version)
       #([table, ..tables], random)
     })
-  let tables = list.reverse(tables)
+  let tables = reverse(tables)
   let schema =
     Schema(
-      tables: list.map(tables, fn(table) { table.relation }),
+      tables: map(tables, fn(table) { table.relation }),
       statements: [
         domains,
         required_functions,
-        ..list.flat_map(tables, fn(table) { table.statements })
+        ..flat_map(tables, fn(table) { table.statements })
       ],
-      targets: list.flat_map(tables, fn(table) { table.targets }),
-      column_types: list.flat_map(tables, fn(table) { table.column_types }),
-      conflict_targets: list.flat_map(tables, fn(table) {
-        table.conflict_targets
-      }),
+      targets: flat_map(tables, fn(table) { table.targets }),
+      column_types: flat_map(tables, fn(table) { table.column_types }),
+      conflict_targets: flat_map(tables, fn(table) { table.conflict_targets }),
     )
   #(schema, random)
 }
@@ -208,20 +206,20 @@ fn generate_table(
   shape: TableShape,
   version: Int,
 ) -> #(TableParts, Random) {
-  let name = "t" <> int.to_string(index)
+  let name = "t" <> to_string(index)
   let #(count, random) = random.between(random, 1, 3)
   let #(plans, random) =
     random.numbers(0, count - 1)
-    |> list.fold(#([], random), fn(state, number) {
+    |> fold(#([], random), fn(state, number) {
       let #(plans, random) = state
       let #(plan, random) = generate_column(random, number, shape, version)
       #([plan, ..plans], random)
     })
-  let plans = list.reverse(plans)
+  let plans = reverse(plans)
   let relation =
     Relation(name, [
       #("id", IntKind),
-      ..list.map(plans, fn(plan) { #(plan.name, plan.kind) })
+      ..map(plans, fn(plan) { #(plan.name, plan.kind) })
     ])
   let #(trigger_column, random) = pick_trigger_column(random, plans)
   let base = base_columns(plans, trigger_column)
@@ -243,8 +241,8 @@ fn generate_table(
     column -> [reject_null_trigger(name, column)]
   }
   let unique_indexes =
-    list.filter(plans, fn(plan) { plan.uniqueness == UniqueIndex })
-    |> list.map(fn(plan) {
+    filter(plans, fn(plan) { plan.uniqueness == UniqueIndex })
+    |> map(fn(plan) {
       "create unique index "
       <> name
       <> "_"
@@ -256,9 +254,9 @@ fn generate_table(
       <> ")"
     })
   let column_types =
-    list.map(plans, fn(plan) { #(name <> "." <> plan.name, column_type(plan)) })
+    map(plans, fn(plan) { #(name <> "." <> plan.name, column_type(plan)) })
   let conflict_targets =
-    list.flat_map(plans, fn(plan) {
+    flat_map(plans, fn(plan) {
       case plan.uniqueness {
         NotUnique -> []
         UniqueIndex -> [#(name, "(" <> plan.name <> ")")]
@@ -271,7 +269,7 @@ fn generate_table(
   let parts =
     TableParts(
       relation:,
-      statements: list.flatten([statements, unique_indexes, trigger]),
+      statements: flatten([statements, unique_indexes, trigger]),
       targets:,
       column_types:,
       conflict_targets:,
@@ -333,7 +331,7 @@ fn generate_column(
     )
   let plan =
     ColumnPlan(
-      name: "k" <> int.to_string(number),
+      name: "k" <> to_string(number),
       kind:,
       rule:,
       sql_type:,
@@ -361,8 +359,8 @@ fn pick_trigger_column(
   plans: List(ColumnPlan),
 ) -> #(String, Random) {
   let plain =
-    list.filter(plans, fn(plan) { plan.rule == Plain })
-    |> list.map(fn(plan) { plan.name })
+    filter(plans, fn(plan) { plan.rule == Plain })
+    |> map(fn(plan) { plan.name })
   let #(wanted, random) = random.chance(random, 0.1)
   case wanted {
     True -> random.choose(random, plain, "")
@@ -376,7 +374,7 @@ fn base_columns(
 ) -> List(TargetColumn) {
   [
     TargetColumn("id", IntKind, False, False),
-    ..list.map(plans, fn(plan) {
+    ..map(plans, fn(plan) {
       TargetColumn(
         plan.name,
         plan.kind,
@@ -400,17 +398,12 @@ fn create_table(name: String, plans: List(ColumnPlan), tail: String) -> String {
     _ -> "id int not null, primary key (id)"
   }
   let definitions =
-    list.flatten([
+    flatten([
       [key],
-      list.map(plans, column_definition),
-      list.flat_map(plans, unique_constraint(name, _)),
+      map(plans, column_definition),
+      flat_map(plans, unique_constraint(name, _)),
     ])
-  "create table "
-  <> name
-  <> " ("
-  <> string.join(definitions, ", ")
-  <> ")"
-  <> tail
+  "create table " <> name <> " (" <> join(definitions, ", ") <> ")" <> tail
 }
 
 /// The type of a column as its definition writes it: a domain, or the
@@ -510,8 +503,8 @@ fn with_child(
 ) -> #(List(String), List(Target)) {
   let child = name <> "_child"
   let dropped =
-    list.filter(plans, fn(plan) { plan.rule == NotNullNoInherit })
-    |> list.map(fn(plan) {
+    filter(plans, fn(plan) { plan.rule == NotNullNoInherit })
+    |> map(fn(plan) {
       "alter table "
       <> child
       <> " alter column "
@@ -519,8 +512,8 @@ fn with_child(
       <> " drop not null"
     })
   let child_columns =
-    list.map(base, fn(column) {
-      let plan = list.find(plans, fn(plan) { plan.name == column.name })
+    map(base, fn(column) {
+      let plan = find(plans, fn(plan) { plan.name == column.name })
       let rule = case plan {
         Ok(plan) -> plan.rule
         Error(Nil) -> NotNull
@@ -548,12 +541,12 @@ fn partitioned(
   base: List(TargetColumn),
 ) -> #(List(String), List(Target), Random) {
   let plain =
-    list.filter(plans, fn(plan) { plan.rule == Plain })
-    |> list.map(fn(plan) { plan.name })
+    filter(plans, fn(plan) { plan.rule == Plain })
+    |> map(fn(plan) { plan.name })
   let #(column, random) = random.choose(random, plain, "")
   let #(not_null, random) = random.chance(random, 0.5)
   let low = name <> "_low"
-  let plan = list.find(plans, fn(plan) { plan.name == column })
+  let plan = find(plans, fn(plan) { plan.name == column })
   let #(constraint, low_rejects_null) = case plan, not_null {
     Error(Nil), _ -> #("", False)
     Ok(plan), True -> #(" (" <> plan.name <> " not null)", True)
@@ -569,7 +562,7 @@ fn partitioned(
     )
   }
   let low_columns =
-    list.map(base, fn(target) {
+    map(base, fn(target) {
       TargetColumn(
         ..target,
         accepts_null: target.accepts_null
@@ -601,7 +594,7 @@ fn legacy(
   name: String,
   plans: List(ColumnPlan),
 ) -> #(List(String), List(Target), Random) {
-  let plain = list.filter(plans, fn(plan) { plan.rule == Plain })
+  let plain = filter(plans, fn(plan) { plan.rule == Plain })
   let #(chosen, random) =
     random.choose(
       random,
@@ -610,13 +603,13 @@ fn legacy(
     )
   let values = fn(id: Int, null_column: String) {
     let others =
-      list.map(plans, fn(plan) {
+      map(plans, fn(plan) {
         case plan.name == null_column {
           True -> "null"
           False -> safe_value(plan.kind)
         }
       })
-    "(" <> string.join([int.to_string(id), ..others], ", ") <> ")"
+    "(" <> join([to_string(id), ..others], ", ") <> ")"
   }
   let statements = case chosen.name {
     "" -> [create_table(name, plans, "")]
@@ -660,16 +653,16 @@ pub fn data_sets(random: Random, schema: Schema) -> #(List(DataSet), Random) {
     fill(random, schema.targets, fn(random) { #([1, 2, 3, 4, 5], random) })
   let #(sets, random) =
     random.numbers(1, 5)
-    |> list.fold(#([], random), fn(state, number) {
+    |> fold(#([], random), fn(state, number) {
       let #(sets, random) = state
       let #(set, random) =
         fill(random, schema.targets, fn(random) {
           let #(count, random) = random.choose(random, [0, 0, 1, 2, 3, 4], 0)
           random.sample(random, [1, 2, 3, 4, 5], count)
         })
-      #([#("random" <> int.to_string(number), set), ..sets], random)
+      #([#("random" <> to_string(number), set), ..sets], random)
     })
-  #([#("full", full), #("empty", ""), ..list.reverse(sets)], random)
+  #([#("full", full), #("empty", ""), ..reverse(sets)], random)
 }
 
 fn fill(
@@ -678,11 +671,11 @@ fn fill(
   pick_ids: fn(Random) -> #(List(Int), Random),
 ) -> #(String, Random) {
   let #(statements, random) =
-    list.fold(targets, #([], random), fn(state, target) {
+    fold(targets, #([], random), fn(state, target) {
       let #(statements, random) = state
       let #(ids, random) = pick_ids(random)
       let #(rows, random) =
-        list.fold(ids, #([], random), fn(state, id) {
+        fold(ids, #([], random), fn(state, id) {
           let #(rows, random) = state
           let #(row, random) = row_values(random, target, id)
           #([row, ..rows], random)
@@ -693,22 +686,22 @@ fn fill(
           "insert into "
           <> target.name
           <> " values "
-          <> string.join(list.reverse(rows), ", "),
+          <> join(reverse(rows), ", "),
         ]
       }
-      #(list.append(statements, statement), random)
+      #(append(statements, statement), random)
     })
-  #(string.join(statements, "; "), random)
+  #(join(statements, "; "), random)
 }
 
 fn row_values(random: Random, target: Target, id: Int) -> #(String, Random) {
   let #(values, random) =
-    list.fold(target.columns, #([], random), fn(state, column) {
+    fold(target.columns, #([], random), fn(state, column) {
       let #(values, random) = state
       let #(value, random) = column_value(random, column, id + target.id_offset)
       #([value, ..values], random)
     })
-  #("(" <> string.join(list.reverse(values), ", ") <> ")", random)
+  #("(" <> join(reverse(values), ", ") <> ")", random)
 }
 
 fn column_value(
@@ -719,7 +712,7 @@ fn column_value(
   let #(value, random) = case column.kind {
     IntKind -> {
       let #(number, random) = random.between(random, 1, 3)
-      #(int.to_string(number), random)
+      #(to_string(number), random)
     }
     TextKind -> random.choose(random, ["'a'", "'b'"], "'a'")
     BoolKind -> random.choose(random, ["true", "false"], "true")
@@ -734,7 +727,7 @@ fn column_value(
   }
   let #(null, random) = random.chance(random, 0.4)
   case column.name, column.accepts_null && null, column.unique {
-    "id", _, _ -> #(int.to_string(id), random)
+    "id", _, _ -> #(to_string(id), random)
     _, True, _ -> #("null", random)
     _, False, True -> #(unique_value(column.kind, id), random)
     _, False, False -> #(value, random)
@@ -744,13 +737,13 @@ fn column_value(
 /// A value that no other row and no parameter of a query has: the base
 /// parameters of the checks are 1, '2024-01-01 10:00:00' and '{1,NULL}'.
 fn unique_value(kind: Kind, id: Int) -> String {
-  let number = int.to_string(id)
+  let number = to_string(id)
   case kind {
-    IntKind -> int.to_string(id * 10 + 7)
+    IntKind -> to_string(id * 10 + 7)
     TextKind -> "'u" <> number <> "'"
     BoolKind -> "true"
     TimestampKind ->
       "'2024-03-01 00:00:00'::timestamp + interval '" <> number <> " days'"
-    IntArrayKind -> "'{" <> int.to_string(id + 100) <> ",NULL}'"
+    IntArrayKind -> "'{" <> to_string(id + 100) <> ",NULL}'"
   }
 }

@@ -4,7 +4,7 @@
 //// them. `column_reason_to_string` and `parameter_reason_to_string` give
 //// the text for messages.
 
-import gleam/int
+import gleam/int.{to_string}
 
 /// Where the value of a result column comes from.
 pub type Origin {
@@ -194,7 +194,7 @@ pub fn parameter_reason_to_string(reason: ParameterReason) -> String {
     RowLevelSecurity -> "a row-level security policy can reject the row"
     RuleAddsQueries(queries) ->
       "a rule rewrites the statement into "
-      <> int.to_string(queries)
+      <> to_string(queries)
       <> " queries, so every parameter is required"
     CastToNotNullDomain -> "the parameter is cast to a NOT NULL domain type"
     CastToDomainWithCheck ->

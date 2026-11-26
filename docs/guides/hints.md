@@ -55,7 +55,7 @@ select id, email, nickname from users where id = $1
 pub fn find(db: Connection, id: Int) -> Result(User, Error(QueryError)) {
   "select id, email, nickname from users where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(user_decoder())
   |> execute(db)
   |> one_row("user.find", [])
@@ -113,7 +113,7 @@ pub fn by_user(
   "select id, user_id, title, body, published from posts
 where user_id = $1 order by id"
   |> query
-  |> parameter(int(user_id))
+  |> parameter(client.int(user_id))
   |> returning(post_decoder())
   |> execute(db)
   |> many_rows("post.by_user", [])
@@ -158,7 +158,7 @@ delete from users where id = $1
 pub fn delete(db: Connection, id: Int) -> Result(Nil, Error(QueryError)) {
   "delete from users where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> execute(db)
   |> no_rows("user.delete", [])
 }
@@ -186,7 +186,7 @@ pub fn rename(
 ) -> Result(Nil, Error(QueryError)) {
   "update users set nickname = $2 where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> parameter(nullable(text, nickname))
   |> execute(db)
   |> no_rows("user.rename", [])
@@ -234,7 +234,7 @@ pub fn publish(
 ) -> Result(Option(Bool), Error(QueryError)) {
   "update posts set published = true where id = $1 returning published"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(at([0], decode.bool))
   |> execute(db)
   |> maybe_row("post.publish", [])
@@ -268,7 +268,7 @@ from users join posts on posts.user_id = users.id
 where posts.published = $1
 order by users.id"
   |> query
-  |> parameter(bool(published))
+  |> parameter(client.bool(published))
   |> returning(user_user_decoder())
   |> execute(db)
   |> many_rows("post.authors", [])
@@ -340,7 +340,7 @@ select sum(id)::int as total from posts where user_id = $1
 pub fn total(db: Connection, user_id: Int) -> Result(Int, Error(QueryError)) {
   "select sum(id)::int as total from posts where user_id = $1"
   |> query
-  |> parameter(int(user_id))
+  |> parameter(client.int(user_id))
   |> returning(at(
     [0],
     promised_not_null(decode.int, "src/app/models/post/total.sql", "total"),
@@ -376,7 +376,7 @@ pub fn tags(
 ) -> Result(Option(List(String)), Error(QueryError)) {
   "select tags from samples where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(at(
     [0],
     optional(promised_elements_not_null(
@@ -472,7 +472,7 @@ A generated module defines and imports some names itself. dream_model refuses a 
 - **Two types with one decoder**: the decoder of a local type `UserUser` and the decoder of the imported type `user.User` are both `user_user_decoder`. Rename one of the types.
 - **A parameter name**: `db`, `client`, `decode`, a helper (`one_row`, `single_row`, `maybe_row`, `optional_row`, `many_rows`, `no_rows`, `query_error_to_error`, `unique_violation`, `schema_fingerprint`), or a name that ends in `_decoder`.
 
-The module imports each other name that it uses with no module, for example `query`, `parameter` and `NotFound`. A name from SQL can be the same as one of these names, for example the function `query` of a file `query.sql`, a parameter `int` or a field `field`. dream_model accepts it. The module then writes that imported name with its module, for example `client.query`, so the module compiles. When two imports give the same name, `dream_postgres/client` keeps the bare name. Thus `client.int` is `int`, and `decode.int` keeps its module.
+The module imports each other name that it uses with no module, for example `query`, `parameter` and `NotFound`. A name from SQL can be the same as one of these names, for example the function `query` of a file `query.sql`, a parameter `int` or a field `field`. dream_model accepts it. The module then writes that imported name with its module, for example `client.query`, so the module compiles. When two imports give the same name, both keep their module. Thus a module that uses `client.int` and `decode.int` writes both with the module, and a module that uses only `decode.int` writes `int`.
 
 ### A type name of an import <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/hints/reserved_type.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 

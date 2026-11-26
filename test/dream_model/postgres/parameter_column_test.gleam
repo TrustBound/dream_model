@@ -2,26 +2,26 @@
 //// relations and written relations of `nullability.analyze`, on the
 //// generator database.
 
-import dream_model/nullability.{type Analysis, TableColumn}
+import dream_model/nullability.{type Analysis, TableColumn, close, connect}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import fixtures/model_database
-import gleam/list
-import gleam/string
+import fixtures/model_database.{url}
+import gleam/list.{flat_map, map}
+import gleam/string.{inspect}
 
 pub fn tests(version: Int) -> TestSuite {
   describe("dream_model/postgres/parameter_column", [
     group(
       "the columns of each parameter",
-      list.map(column_cases(), fn(example) {
+      map(column_cases(), fn(example) {
         let #(title, sql, expected) = example
         it(title, fn() {
           // Act
           let columns =
             analyze(version, sql).parameters
-            |> list.map(fn(parameter) {
-              list.map(parameter.columns, fn(column) {
+            |> map(fn(parameter) {
+              map(parameter.columns, fn(column) {
                 column.table <> "." <> column.column
               })
             })
@@ -30,13 +30,13 @@ pub fn tests(version: Int) -> TestSuite {
           columns
           |> should
           |> be_equal(expected)
-          |> or_fail_with("Expected " <> string.inspect(expected))
+          |> or_fail_with("Expected " <> inspect(expected))
         })
       }),
     ),
     group(
       "written relations",
-      list.map(written_cases(), fn(example) {
+      map(written_cases(), fn(example) {
         let #(title, sql, expected) = example
         it(title, fn() {
           // Act
@@ -46,7 +46,7 @@ pub fn tests(version: Int) -> TestSuite {
           written
           |> should
           |> be_equal(expected)
-          |> or_fail_with("Expected " <> string.inspect(expected))
+          |> or_fail_with("Expected " <> inspect(expected))
         })
       }),
     ),
@@ -80,7 +80,7 @@ pub fn tests(version: Int) -> TestSuite {
         // Act
         let columns =
           analyze(version, "insert into \"Odd Names\" values ($1, $2)").parameters
-          |> list.flat_map(fn(parameter) { parameter.columns })
+          |> flat_map(fn(parameter) { parameter.columns })
 
         // Assert
         columns
@@ -96,9 +96,9 @@ pub fn tests(version: Int) -> TestSuite {
 }
 
 fn analyze(version: Int, sql: String) -> Analysis {
-  let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+  let assert Ok(analyzer) = connect(url(version))
   let assert Ok(#(analysis, analyzer)) = nullability.analyze(analyzer, sql)
-  let _ = nullability.close(analyzer)
+  let _ = close(analyzer)
   analysis
 }
 

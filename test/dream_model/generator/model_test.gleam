@@ -10,9 +10,9 @@ import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/model_database
-import gleam/list
+import gleam/list.{filter}
 import gleam/result
-import gleam/string
+import gleam/string.{split, split_once, starts_with}
 
 pub fn tests(version: Int) -> TestSuite {
   describe("dream_model/generator/model", [
@@ -284,6 +284,45 @@ fn render_tests(version: Int) {
       |> should
       |> be_equal(Ok(count_module))
       |> or_fail_with("Expected the count module")
+    }),
+    it("qualifies int on both sides only where client and decode give it", fn() {
+      // Arrange
+      let both =
+        make_unit(version, "app/models/user", [
+          #(
+            "total.sql",
+            "-- returns: one\nselect count(*) as total from users where id = $1",
+          ),
+        ])
+      let decode_only =
+        make_unit(version, "app/models/user", [
+          #("count.sql", "-- returns: one\nselect count(*) as total from users"),
+        ])
+
+      // Act
+      let found = #(
+        model.render(both, "abc") |> result.map(import_lines),
+        model.render(decode_only, "abc") |> result.map(import_lines),
+      )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(#(
+        Ok([
+          "import dream_errors.{type Error, Conflict, Failed, NotFound, Timeout, Unavailable}",
+          "import dream_postgres/client.{type Connection, type QueryError, type Returned, SchemaFingerprint, broken_promise, execute, infinite_value, more_than_one_row, parameter, query, returning, to_error, violated_constraint}",
+          "import gleam/dynamic/decode.{at}",
+        ]),
+        Ok([
+          "import dream_errors.{type Error, Conflict, Failed, NotFound, Timeout, Unavailable}",
+          "import dream_postgres/client.{type Connection, type QueryError, type Returned, SchemaFingerprint, broken_promise, execute, infinite_value, more_than_one_row, query, returning, to_error, violated_constraint}",
+          "import gleam/dynamic/decode.{at, int}",
+        ]),
+      ))
+      |> or_fail_with(
+        "Expected client.int and decode.int in the first module, and int from decode in the second",
+      )
     }),
     it("gives a file with a promise a decoder of its own", fn() {
       // Arrange
@@ -683,16 +722,21 @@ fn unique_violation(
 /// The text of the function `name` of a module, from its `fn` line to its
 /// closing brace.
 fn function_text(module: String, name: String) -> String {
-  let start = case string.split_once(module, "pub fn " <> name <> "(") {
+  let start = case split_once(module, "pub fn " <> name <> "(") {
     Ok(#(_, rest)) -> "pub fn " <> name <> "(" <> rest
     Error(Nil) ->
-      case string.split_once(module, "fn " <> name <> "(") {
+      case split_once(module, "fn " <> name <> "(") {
         Ok(#(_, rest)) -> "fn " <> name <> "(" <> rest
         Error(Nil) -> ""
       }
   }
-  case string.split_once(start, "\n}") {
+  case split_once(start, "\n}") {
     Ok(#(body, _)) -> body <> "\n}"
     Error(Nil) -> start
   }
+}
+
+fn import_lines(text: String) -> List(String) {
+  split(text, "\n")
+  |> filter(starts_with(_, "import "))
 }

@@ -12,18 +12,18 @@
 ////   SQL, for example the function `query` of a file `query.sql`, a
 ////   parameter, a field or a type. It can also be a name of the code
 ////   itself, for example a variable.
-//// - an earlier import gives a name that is the same, for example
-////   `client.int` and `decode.int`. The first import in the list keeps the
-////   bare name.
+//// - two imports give the same name, for example `client.int` and
+////   `decode.int`. Then both keep their module, so the order of the imports
+////   never changes the code.
 ////
 //// Gleam keeps types and values apart. Thus a type `Error` does not clash
 //// with the constructor `Error` of the prelude.
 
 import gleam/list.{
-  any, append, drop, filter, filter_map, flat_map, fold, map, reverse, sort,
-  unique,
+  any, append, count, drop, filter, filter_map, flat_map, fold, map, reverse,
+  sort, unique,
 }
-import gleam/set.{type Set, from_list, insert, new}
+import gleam/set.{type Set, from_list, insert}
 import gleam/string.{compare, concat, contains, join, slice, to_graphemes}
 
 /// A module that a generated module can import.
@@ -81,10 +81,17 @@ pub fn unqualify(
     from_list(map(aliases, fn(alias) { #(ValueNamespace, alias) }))
   let taken = fold(tokens, aliases_taken, add_bare)
   let references = flat_map(imports, references_of(_, tokens))
-  let #(_, bare) =
-    fold(references, #(taken, new()), fn(state, reference) {
-      choose(state, reference)
+  let offered =
+    flat_map(references, fn(reference) { keys_of(reference.1, reference.2) })
+  let bare =
+    filter(references, fn(reference) {
+      !any(keys_of(reference.1, reference.2), fn(key) {
+        set.contains(taken, key)
+        || count(offered, fn(other) { other == key }) > 1
+      })
     })
+    |> map(fn(reference) { #({ reference.0 }.alias, reference.1) })
+    |> from_list
   let lines = filter_map(imports, import_line(_, tokens, bare))
   let text =
     map(tokens, fn(token) { token_text(token, bare) })
@@ -115,19 +122,12 @@ fn used_names(entry: Import, tokens: List(Token)) -> List(String) {
   |> sort(compare)
 }
 
-/// Makes the name bare when no taken name of its namespaces is the same,
-/// and then takes it.
-fn choose(
-  state: #(Set(#(Namespace, String)), Set(#(String, String))),
-  reference: #(Import, String, List(Namespace)),
-) -> #(Set(#(Namespace, String)), Set(#(String, String))) {
-  let #(taken, bare) = state
-  let #(entry, name, namespaces) = reference
-  let keys = map(namespaces, fn(namespace) { #(namespace, name) })
-  case any(keys, set.contains(taken, _)) {
-    True -> state
-    False -> #(fold(keys, taken, insert), insert(bare, #(entry.alias, name)))
-  }
+/// The keys of a name in each of its namespaces.
+fn keys_of(
+  name: String,
+  namespaces: List(Namespace),
+) -> List(#(Namespace, String)) {
+  map(namespaces, fn(namespace) { #(namespace, name) })
 }
 
 fn add_bare(

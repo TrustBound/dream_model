@@ -3,6 +3,7 @@
 import dream_model/generator/query_hint.{
   HintError, LocalType, ModuleType, NamedLine, QueryHints, ReturnsHint,
   ReturnsMany, ReturnsMaybe, ReturnsNone, ReturnsOne, UniqueHint,
+  is_module_segment, is_type_name, parse, returns_to_string, type_name_to_string,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -26,7 +27,7 @@ fn parse_tests() {
       let sql = "-- a comment\nselect 1"
 
       // Act
-      let hints = query_hint.parse(sql)
+      let hints = parse(sql)
 
       // Assert
       hints
@@ -50,7 +51,7 @@ fn parse_tests() {
         "-- Returns: One User\n  -- UNIQUE: users_email_key, , users_name_key \n-- unique: users_pkey\n-- not null: a, b\n-- nullable: c\n-- params: id\n-- other: x\n-- Not Null Elements: tags, , scores\n-- not null elements: labels\nselect 1"
 
       // Act
-      let hints = query_hint.parse(sql)
+      let hints = parse(sql)
 
       // Assert
       hints
@@ -86,7 +87,7 @@ fn parse_tests() {
         "-- returns: many\n\nselect email\n-- returns: one User\n-- unique: users_email_key\n-- not null elements: tags\nfrom users"
 
       // Act
-      let hints = query_hint.parse(sql)
+      let hints = parse(sql)
 
       // Assert
       hints
@@ -109,8 +110,7 @@ fn parse_tests() {
       let sql = "-- returns: maybe app/models/user.User"
 
       // Act
-      let returns =
-        query_hint.parse(sql) |> result.map(fn(hints) { hints.returns })
+      let returns = parse(sql) |> result.map(fn(hints) { hints.returns })
 
       // Assert
       returns
@@ -131,8 +131,7 @@ fn parse_tests() {
       let sql = "--returns:many"
 
       // Act
-      let returns =
-        query_hint.parse(sql) |> result.map(fn(hints) { hints.returns })
+      let returns = parse(sql) |> result.map(fn(hints) { hints.returns })
 
       // Assert
       returns
@@ -145,8 +144,7 @@ fn parse_tests() {
       let sql = "-- returns: none"
 
       // Act
-      let returns =
-        query_hint.parse(sql) |> result.map(fn(hints) { hints.returns })
+      let returns = parse(sql) |> result.map(fn(hints) { hints.returns })
 
       // Assert
       returns
@@ -160,7 +158,7 @@ fn parse_tests() {
 fn refused(
   sql: String,
 ) -> Result(query_hint.QueryHints, List(query_hint.HintError)) {
-  query_hint.parse(sql)
+  parse(sql)
 }
 
 fn refusal_tests() {
@@ -400,7 +398,7 @@ fn name_tests() {
   group("names", [
     it("type_name_to_string writes a local type", fn() {
       // Act
-      let text = query_hint.type_name_to_string(LocalType("User"))
+      let text = type_name_to_string(LocalType("User"))
 
       // Assert
       text
@@ -410,8 +408,7 @@ fn name_tests() {
     }),
     it("type_name_to_string writes a type of another model", fn() {
       // Act
-      let text =
-        query_hint.type_name_to_string(ModuleType("app/models/user", "User"))
+      let text = type_name_to_string(ModuleType("app/models/user", "User"))
 
       // Assert
       text
@@ -423,7 +420,7 @@ fn name_tests() {
       // Act
       let words =
         [ReturnsOne, ReturnsMaybe, ReturnsMany, ReturnsNone]
-        |> list.map(query_hint.returns_to_string)
+        |> list.map(returns_to_string)
 
       // Assert
       words
@@ -433,7 +430,7 @@ fn name_tests() {
     }),
     it("is_type_name refuses an empty name", fn() {
       // Act
-      let accepted = query_hint.is_type_name("")
+      let accepted = is_type_name("")
 
       // Assert
       accepted
@@ -443,7 +440,7 @@ fn name_tests() {
     }),
     it("is_module_segment accepts snake case", fn() {
       // Act
-      let accepted = query_hint.is_module_segment("user_2")
+      let accepted = is_module_segment("user_2")
 
       // Assert
       accepted
@@ -453,7 +450,7 @@ fn name_tests() {
     }),
     it("is_module_segment refuses an empty segment", fn() {
       // Act
-      let accepted = query_hint.is_module_segment("")
+      let accepted = is_module_segment("")
 
       // Assert
       accepted

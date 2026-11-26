@@ -17,11 +17,13 @@
 //// name as the field's value, the same as PostgreSQL's own reader, which
 //// knows each field.
 
-import gleam/dict.{type Dict}
-import gleam/int
-import gleam/list
-import gleam/result
-import gleam/string
+import gleam/dict.{type Dict, delete, get, insert, map_values, new}
+import gleam/int.{to_string}
+import gleam/list.{drop, map, reverse}
+import gleam/result.{replace_error, try, unwrap}
+import gleam/string.{
+  from_utf_codepoints, starts_with, to_utf_codepoints, utf_codepoint_to_int,
+}
 
 /// One value of the node text format.
 pub type Node {
@@ -79,8 +81,8 @@ type CharacterClass {
 
 /// Reads one value from node text.
 pub fn parse(text: String) -> Result(Node, ParseError) {
-  let tokens = tokenize(string.to_utf_codepoints(text), [])
-  use #(value, rest) <- result.try(parse_value(tokens))
+  let tokens = tokenize(to_utf_codepoints(text), [])
+  use #(value, rest) <- try(parse_value(tokens))
   case rest {
     [] -> Ok(value)
     [token, ..] -> Error(UnexpectedToken(token_to_string(token)))
@@ -101,7 +103,7 @@ pub fn parse_error_to_string(error: ParseError) -> String {
 /// has no such field.
 pub fn get_field(node: Node, name: String) -> Node {
   case node {
-    Record(fields:, ..) -> dict.get(fields, name) |> result.unwrap(Empty)
+    Record(fields:, ..) -> get(fields, name) |> unwrap(Empty)
     _ -> Empty
   }
 }
@@ -110,9 +112,9 @@ pub fn get_field(node: Node, name: String) -> Node {
 /// is no such item.
 pub fn get_item(node: Node, index: Int) -> Node {
   items(node)
-  |> list.drop(index)
+  |> drop(index)
   |> list.first
-  |> result.unwrap(Empty)
+  |> unwrap(Empty)
 }
 
 /// Returns the items of a list. `Empty` is the empty list, and any other
@@ -122,8 +124,7 @@ pub fn items(node: Node) -> List(Node) {
   case node {
     NodeList(items) -> items
     Empty -> []
-    IntegerList(items:, ..) ->
-      list.map(items, fn(item) { Token(int.to_string(item)) })
+    IntegerList(items:, ..) -> map(items, fn(item) { Token(to_string(item)) })
     _ -> [node]
   }
 }
@@ -166,10 +167,10 @@ pub fn remove_locations(node: Node) -> Node {
     Record(name:, fields:) ->
       Record(
         name:,
-        fields: dict.delete(fields, "location")
-          |> dict.map_values(fn(_name, value) { remove_locations(value) }),
+        fields: delete(fields, "location")
+          |> map_values(fn(_name, value) { remove_locations(value) }),
       )
-    NodeList(items) -> NodeList(list.map(items, remove_locations))
+    NodeList(items) -> NodeList(map(items, remove_locations))
     _ -> node
   }
 }
@@ -181,7 +182,7 @@ fn tokenize(
   tokens: List(Token),
 ) -> List(Token) {
   case characters {
-    [] -> list.reverse(tokens)
+    [] -> reverse(tokens)
     [character, ..rest] -> tokenize_from(character, rest, tokens)
   }
 }
@@ -231,16 +232,16 @@ fn read_word_from(
 /// starts with a quote is a string: its text is without the first and the
 /// last character.
 fn make_word(raw: List(UtfCodepoint), text: List(UtfCodepoint)) -> Token {
-  let raw = string.from_utf_codepoints(list.reverse(raw))
-  let text = case string.starts_with(raw, "\""), text {
-    True, [_last, _, ..] -> text |> list.drop(1) |> list.reverse |> list.drop(1)
-    _, _ -> list.reverse(text)
+  let raw = from_utf_codepoints(reverse(raw))
+  let text = case starts_with(raw, "\""), text {
+    True, [_last, _, ..] -> text |> drop(1) |> reverse |> drop(1)
+    _, _ -> reverse(text)
   }
-  Word(raw:, text: string.from_utf_codepoints(text))
+  Word(raw:, text: from_utf_codepoints(text))
 }
 
 fn classify(character: UtfCodepoint) -> CharacterClass {
-  case string.utf_codepoint_to_int(character) {
+  case utf_codepoint_to_int(character) {
     32 | 10 | 9 -> Space
     123 -> Delimiter(OpenNode)
     125 -> Delimiter(CloseNode)
@@ -275,8 +276,7 @@ fn parse_value(
 ) -> Result(#(Node, List(Token)), ParseError) {
   case tokens {
     [] -> Error(UnexpectedEnd)
-    [OpenNode, Word(text: name, ..), ..rest] ->
-      parse_fields(rest, name, dict.new())
+    [OpenNode, Word(text: name, ..), ..rest] -> parse_fields(rest, name, new())
     [OpenList, ..rest] -> parse_items(rest, [])
     [Word(raw: "<>", ..), ..rest] -> Ok(#(Empty, rest))
     [Word(text:, ..), ..rest] -> Ok(#(Token(text), rest))
@@ -292,8 +292,8 @@ fn parse_fields(
   case tokens {
     [CloseNode, ..rest] -> Ok(#(Record(name:, fields:), rest))
     [Word(raw: ":" <> field, ..), ..rest] if field != "" -> {
-      use #(value, rest) <- result.try(parse_field_value(rest))
-      parse_fields(rest, name, dict.insert(fields, field, value))
+      use #(value, rest) <- try(parse_field_value(rest))
+      parse_fields(rest, name, insert(fields, field, value))
     }
     [] -> Error(UnexpectedEnd)
     [token, ..] -> Error(UnexpectedToken(token_to_string(token)))
@@ -309,8 +309,8 @@ fn parse_field_value(
   case tokens {
     [CloseNode, ..] -> Ok(#(Empty, tokens))
     _ -> {
-      use #(first, rest) <- result.try(parse_value(tokens))
-      use #(more, rest) <- result.try(parse_more_values(rest, []))
+      use #(first, rest) <- try(parse_value(tokens))
+      use #(more, rest) <- try(parse_more_values(rest, []))
       Ok(#(combine_values(first, more), rest))
     }
   }
@@ -328,7 +328,7 @@ fn parse_more_values(
   values: List(Node),
 ) -> Result(#(List(Node), List(Token)), ParseError) {
   case tokens {
-    [CloseNode, ..] | [] -> Ok(#(list.reverse(values), tokens))
+    [CloseNode, ..] | [] -> Ok(#(reverse(values), tokens))
     [token, ..] -> parse_more_values_from(token, tokens, values)
   }
 }
@@ -339,9 +339,9 @@ fn parse_more_values_from(
   values: List(Node),
 ) -> Result(#(List(Node), List(Token)), ParseError) {
   case is_field_name(token) {
-    True -> Ok(#(list.reverse(values), tokens))
+    True -> Ok(#(reverse(values), tokens))
     False -> {
-      use #(value, rest) <- result.try(parse_value(tokens))
+      use #(value, rest) <- try(parse_value(tokens))
       parse_more_values(rest, [value, ..values])
     }
   }
@@ -352,13 +352,13 @@ fn parse_items(
   items: List(Node),
 ) -> Result(#(Node, List(Token)), ParseError) {
   case tokens, items {
-    [CloseList, ..rest], _ -> Ok(#(NodeList(list.reverse(items)), rest))
+    [CloseList, ..rest], _ -> Ok(#(NodeList(reverse(items)), rest))
     [Word(raw: "b", ..), ..rest], [] -> parse_integers(rest, Bitmapset, [])
     [Word(raw: "i", ..), ..rest], [] -> parse_integers(rest, Integers, [])
     [Word(raw: "o", ..), ..rest], [] -> parse_integers(rest, Oids, [])
     [Word(raw: "x", ..), ..rest], [] -> parse_integers(rest, TransactionIds, [])
     _, _ -> {
-      use #(item, rest) <- result.try(parse_value(tokens))
+      use #(item, rest) <- try(parse_value(tokens))
       parse_items(rest, [item, ..items])
     }
   }
@@ -371,11 +371,9 @@ fn parse_integers(
 ) -> Result(#(Node, List(Token)), ParseError) {
   case tokens {
     [CloseList, ..rest] ->
-      Ok(#(IntegerList(kind:, items: list.reverse(numbers)), rest))
+      Ok(#(IntegerList(kind:, items: reverse(numbers)), rest))
     [Word(raw:, ..), ..rest] -> {
-      use number <- result.try(
-        int.parse(raw) |> result.replace_error(NotAnInteger(raw)),
-      )
+      use number <- try(int.parse(raw) |> replace_error(NotAnInteger(raw)))
       parse_integers(rest, kind, [number, ..numbers])
     }
     [] -> Error(UnexpectedEnd)

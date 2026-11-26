@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The generated code imports each type, constructor and function that it
   uses with no module, for example `query` and `NotFound`. A name keeps its
   module only when the bare name is the same as a name from SQL, a name of
-  the module, or a name of another import.
+  the module, or a name that another import also gives. In the last case,
+  both imports keep their module.
 - `gleam run -m dream_model -- --check` writes nothing, and exits with
   status 1 when a module is missing or differs from its `.sql` files.
 - The NULL rules: a column or a parameter is `Option` only when it can be

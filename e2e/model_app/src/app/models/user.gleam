@@ -6,7 +6,7 @@ import dream_errors.{
 import dream_postgres/client.{
   type Connection, type QueryError, type Returned, type Timestamp,
   SchemaFingerprint, broken_promise, execute, finite_timestamp, infinite_value,
-  int, more_than_one_row, nullable, parameter, query, returning, text,
+  more_than_one_row, nullable, parameter, query, returning, text,
   timestamp_with_time_zone_decoder, to_error, violated_constraint,
 }
 import gleam/dynamic/decode.{type Decoder, at, field, optional, string, success}
@@ -61,7 +61,7 @@ pub fn created_at(
 ) -> Result(Timestamp, Error(QueryError)) {
   "select created_at from users where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(at(
     [0],
     finite_timestamp(timestamp_with_time_zone_decoder(), "created_at"),
@@ -74,7 +74,7 @@ pub fn created_at(
 pub fn delete(db: Connection, id: Int) -> Result(Nil, Error(QueryError)) {
   "delete from users where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> execute(db)
   |> no_rows("user.delete", [])
 }
@@ -83,7 +83,7 @@ pub fn delete(db: Connection, id: Int) -> Result(Nil, Error(QueryError)) {
 pub fn find(db: Connection, id: Int) -> Result(User, Error(QueryError)) {
   "select id, email, nickname from users where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(user_decoder())
   |> execute(db)
   |> one_row("user.find", [])
@@ -119,7 +119,7 @@ pub fn rename(
 ) -> Result(Nil, Error(QueryError)) {
   "update users set nickname = $2 where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> parameter(nullable(text, nickname))
   |> execute(db)
   |> no_rows("user.rename", [])

@@ -6,21 +6,21 @@
 //// `create` drops and creates both databases on a server, so each test
 //// run starts from the same state.
 
-import dream_model/postgres/wire
-import fixtures/servers
-import gleam/result
-import simplifile
+import dream_model/postgres/wire.{close, error_to_string, simple_query}
+import fixtures/servers.{connect, database_name, default_database}
+import gleam/result.{map_error, replace, try}
+import simplifile.{describe_error, read}
 
 /// The database of the generator tests on each server, with the prefix of
 /// `servers.database_name`.
 pub fn database() -> String {
-  servers.database_name("dream_model_generator")
+  database_name("dream_model_generator")
 }
 
 /// The database of the end-to-end app on each server, with the prefix of
 /// `servers.database_name`.
 pub fn e2e_database() -> String {
-  servers.database_name("dream_model_e2e")
+  database_name("dream_model_e2e")
 }
 
 /// The schema file of the end-to-end app.
@@ -64,11 +64,11 @@ create table prices (
 
 /// Drops and creates both databases on the server of a version.
 pub fn create(version: Int) -> Result(Nil, String) {
-  use schema <- result.try(
-    simplifile.read(e2e_schema_path)
-    |> result.map_error(simplifile.describe_error),
+  use schema <- try(
+    read(e2e_schema_path)
+    |> map_error(describe_error),
   )
-  use Nil <- result.try(recreate(version, database(), schema <> extra_schema))
+  use Nil <- try(recreate(version, database(), schema <> extra_schema))
   recreate(version, e2e_database(), schema)
 }
 
@@ -78,22 +78,22 @@ pub fn recreate(
   name: String,
   schema: String,
 ) -> Result(Nil, String) {
-  let admin = servers.connect(version, servers.default_database)
+  let admin = connect(version, default_database)
   let created = {
-    use _ <- result.try(wire.simple_query(
+    use _ <- try(simple_query(
       admin,
       "drop database if exists " <> name <> " with (force)",
     ))
-    wire.simple_query(admin, "create database " <> name)
+    simple_query(admin, "create database " <> name)
   }
-  let _ = wire.close(admin)
-  use _ <- result.try(created |> result.map_error(wire.error_to_string))
-  let connection = servers.connect(version, name)
-  let filled = wire.simple_query(connection, schema)
-  let _ = wire.close(connection)
+  let _ = close(admin)
+  use _ <- try(created |> map_error(error_to_string))
+  let connection = connect(version, name)
+  let filled = simple_query(connection, schema)
+  let _ = close(connection)
   filled
-  |> result.replace(Nil)
-  |> result.map_error(wire.error_to_string)
+  |> replace(Nil)
+  |> map_error(error_to_string)
 }
 
 /// Returns the URL of the generator database on the server of a version.

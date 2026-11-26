@@ -13,17 +13,20 @@
 //// build/e2e/model_app once, and again when its packages.toml is not the
 //// same. The tests of one version run one at a time.
 
-import dream_model/command.{Outcome}
+import dream_model/command.{Outcome, run}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{before_all, describe, it}
-import fixtures/model_database
+import fixtures/model_database.{e2e_database, recreate}
 import fixtures/servers
-import gleam/int
-import gleam/list
-import gleam/result
-import gleam/string
-import simplifile
+import gleam/int.{to_string}
+import gleam/list.{drop, filter, flatten, reverse, take, try_each}
+import gleam/result.{map_error, try}
+import gleam/string.{concat, drop_start, split, split_once, starts_with}
+import simplifile.{
+  copy_directory, copy_file, create_directory_all, delete, describe_error,
+  is_directory, write,
+}
 
 const source = "e2e/model_app"
 
@@ -32,7 +35,7 @@ const packages_build = "build/e2e/model_app/build"
 
 /// The copy of the app for a version.
 fn copy_of(version: Int) -> String {
-  "build/e2e/" <> int.to_string(version) <> "/model_app"
+  "build/e2e/" <> to_string(version) <> "/model_app"
 }
 
 const url_variable = "MODEL_APP_DATABASE_URL"
@@ -54,7 +57,7 @@ fn run_program(
 
 pub fn tests(version: Int) -> TestSuite {
   let copy = copy_of(version)
-  let url = servers.url(version, model_database.e2e_database())
+  let url = servers.url(version, e2e_database())
   let read_environment_variable = fn(name) {
     case name == url_variable {
       True -> Ok(url)
@@ -62,14 +65,13 @@ pub fn tests(version: Int) -> TestSuite {
     }
   }
   describe(
-    "the end-to-end app on PostgreSQL " <> int.to_string(version),
-    list.flatten([
+    "the end-to-end app on PostgreSQL " <> to_string(version),
+    flatten([
       [
         before_all(fn() { prepare(version, copy) }),
         it("--check lists every module as missing before generation", fn() {
           // Act
-          let outcome =
-            command.run(["--check"], copy, read_environment_variable)
+          let outcome = run(["--check"], copy, read_environment_variable)
 
           // Assert
           outcome
@@ -82,7 +84,7 @@ pub fn tests(version: Int) -> TestSuite {
         }),
         it("writes the four modules", fn() {
           // Act
-          let outcome = command.run([], copy, read_environment_variable)
+          let outcome = run([], copy, read_environment_variable)
 
           // Assert
           outcome
@@ -114,8 +116,7 @@ pub fn tests(version: Int) -> TestSuite {
       [
         it("--check passes after the generation", fn() {
           // Act
-          let outcome =
-            command.run(["--check"], copy, read_environment_variable)
+          let outcome = run(["--check"], copy, read_environment_variable)
 
           // Assert
           outcome
@@ -130,12 +131,11 @@ pub fn tests(version: Int) -> TestSuite {
           // Arrange
           let path = copy <> "/src/app/models/post.gleam"
           let assert Ok(text) = simplifile.read(path)
-          let assert Ok(Nil) = simplifile.write(path, text <> "\n// edited\n")
+          let assert Ok(Nil) = write(path, text <> "\n// edited\n")
 
           // Act
-          let outcome =
-            command.run(["--check"], copy, read_environment_variable)
-          let assert Ok(Nil) = simplifile.write(path, text)
+          let outcome = run(["--check"], copy, read_environment_variable)
+          let assert Ok(Nil) = write(path, text)
 
           // Assert
           outcome
@@ -182,14 +182,14 @@ pub fn tests(version: Int) -> TestSuite {
           // Arrange
           let path = copy <> "/src/app/models/sample.gleam"
           let assert Ok(text) = simplifile.read(path)
-          let assert Ok(Nil) = simplifile.delete(path)
+          let assert Ok(Nil) = delete(path)
 
           // Act
           let #(status, output) =
             run_program("sh", ["scripts/check-models.sh"], copy, [
               #(url_variable, url),
             ])
-          let assert Ok(Nil) = simplifile.write(path, text)
+          let assert Ok(Nil) = write(path, text)
 
           // Assert
           #(status, last_lines(output, 2))
@@ -223,24 +223,20 @@ pub fn tests(version: Int) -> TestSuite {
 /// Makes a new database and a new copy of the app with no generated
 /// modules, and keeps the packages of the copy.
 fn prepare(version: Int, copy: String) -> Result(Nil, String) {
-  use schema <- result.try(read(source <> "/schema.sql"))
-  use Nil <- result.try(model_database.recreate(
-    version,
-    model_database.e2e_database(),
-    schema,
-  ))
-  use Nil <- result.try(require_packages(copy))
-  use Nil <- result.try(
+  use schema <- try(read(source <> "/schema.sql"))
+  use Nil <- try(recreate(version, e2e_database(), schema))
+  use Nil <- try(require_packages(copy))
+  use Nil <- try(
     ["src", "test", "scripts", "gleam.toml", "manifest.toml"]
-    |> list.try_each(fn(entry) {
-      let _ = simplifile.delete(copy <> "/" <> entry)
+    |> try_each(fn(entry) {
+      let _ = delete(copy <> "/" <> entry)
       copy_entry(copy, entry)
     }),
   )
-  use Nil <- result.try(copy_dream_model(copy))
-  list.try_each(modules, fn(module) {
-    simplifile.delete(copy <> "/src/app/models/" <> module <> ".gleam")
-    |> result.map_error(simplifile.describe_error)
+  use Nil <- try(copy_dream_model(copy))
+  try_each(modules, fn(module) {
+    delete(copy <> "/src/app/models/" <> module <> ".gleam")
+    |> map_error(describe_error)
   })
 }
 
@@ -248,13 +244,11 @@ fn prepare(version: Int, copy: String) -> Result(Nil, String) {
 /// its compiled copy, so `gleam run -m dream_model` in the app runs it.
 fn copy_dream_model(copy: String) -> Result(Nil, String) {
   let package = copy <> "/build/packages/dream_model"
-  let _ = simplifile.delete(package <> "/src")
-  let _ = simplifile.delete(copy <> "/build/dev/erlang/dream_model")
-  simplifile.copy_directory(at: "src", to: package <> "/src")
-  |> result.try(fn(_) {
-    simplifile.copy_file(at: "gleam.toml", to: package <> "/gleam.toml")
-  })
-  |> result.map_error(simplifile.describe_error)
+  let _ = delete(package <> "/src")
+  let _ = delete(copy <> "/build/dev/erlang/dream_model")
+  copy_directory(at: "src", to: package <> "/src")
+  |> try(fn(_) { copy_file(at: "gleam.toml", to: package <> "/gleam.toml") })
+  |> map_error(describe_error)
 }
 
 /// Checks that the app has its packages, and copies the build folder with
@@ -267,10 +261,10 @@ fn require_packages(copy: String) -> Result(Nil, String) {
       case simplifile.read(copy <> "/build" <> list_file) {
         Ok(copied) if copied == packages -> Ok(Nil)
         _ -> {
-          let _ = simplifile.delete(copy <> "/build")
-          let _ = simplifile.create_directory_all(copy)
-          simplifile.copy_directory(at: packages_build, to: copy <> "/build")
-          |> result.map_error(simplifile.describe_error)
+          let _ = delete(copy <> "/build")
+          let _ = create_directory_all(copy)
+          copy_directory(at: packages_build, to: copy <> "/build")
+          |> map_error(describe_error)
         }
       }
     Error(_) ->
@@ -283,40 +277,40 @@ fn require_packages(copy: String) -> Result(Nil, String) {
 fn copy_entry(copy: String, entry: String) -> Result(Nil, String) {
   let from = source <> "/" <> entry
   let to = copy <> "/" <> entry
-  case simplifile.is_directory(from) {
-    Ok(True) -> simplifile.copy_directory(at: from, to:)
-    _ -> simplifile.copy_file(at: from, to:)
+  case is_directory(from) {
+    Ok(True) -> copy_directory(at: from, to:)
+    _ -> copy_file(at: from, to:)
   }
-  |> result.map_error(simplifile.describe_error)
+  |> map_error(describe_error)
 }
 
 fn read(path: String) -> Result(String, String) {
-  simplifile.read(path) |> result.map_error(simplifile.describe_error)
+  simplifile.read(path) |> map_error(describe_error)
 }
 
 /// The text without the value of the fingerprint hash.
 fn without_hash(text: String) -> String {
-  case string.split_once(text, "hash: \"") {
-    Ok(#(before, after)) -> before <> "hash: \"" <> string.drop_start(after, 64)
+  case split_once(text, "hash: \"") {
+    Ok(#(before, after)) -> before <> "hash: \"" <> drop_start(after, 64)
     Error(Nil) -> text
   }
 }
 
 /// The last `count` lines of an output that ends with a line break.
 fn last_lines(output: String, count: Int) -> String {
-  string.split(output, "\n")
-  |> list.reverse
-  |> list.drop(1)
-  |> list.take(count)
-  |> list.reverse
+  split(output, "\n")
+  |> reverse
+  |> drop(1)
+  |> take(count)
+  |> reverse
   |> list.map(fn(line) { line <> "\n" })
-  |> string.concat
+  |> concat
 }
 
 /// The lines of the app's checks: the lines that start with `| `.
 fn transcript(output: String) -> String {
-  string.split(output, "\n")
-  |> list.filter(string.starts_with(_, "| "))
+  split(output, "\n")
+  |> filter(starts_with(_, "| "))
   |> list.map(fn(line) { line <> "\n" })
-  |> string.concat
+  |> concat
 }

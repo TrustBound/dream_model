@@ -77,22 +77,61 @@ pub fn tests() -> TestSuite {
       ))
       |> or_fail_with("Expected client.query to keep its module")
     }),
-    it("gives a name of two imports to the first import", fn() {
+    it("keeps the module of a name that two imports give, on both sides", fn() {
       // Act
-      let found =
-        unqualify("client.int(id) decode.int decode.field", [client, decode])
+      let found = #(
+        unqualify("client.int(id) decode.int decode.field", [client, decode]),
+        unqualify("client.int(id) decode.int decode.field", [decode, client]),
+      )
 
       // Assert
       found
       |> should
       |> be_equal(#(
-        [
-          "import dream_postgres/client.{int}",
-          "import gleam/dynamic/decode.{field}",
-        ],
-        "int(id) decode.int field",
+        #(
+          [
+            "import dream_postgres/client",
+            "import gleam/dynamic/decode.{field}",
+          ],
+          "client.int(id) decode.int field",
+        ),
+        #(
+          [
+            "import gleam/dynamic/decode.{field}",
+            "import dream_postgres/client",
+          ],
+          "client.int(id) decode.int field",
+        ),
       ))
-      |> or_fail_with("Expected decode.int to keep its module")
+      |> or_fail_with("Expected client.int and decode.int in both orders")
+    }),
+    it("imports a name bare that only one import gives, in each order", fn() {
+      // Act
+      let found = #(
+        unqualify("decode.at([0], decode.int) client.query", [client, decode]),
+        unqualify("decode.at([0], decode.int) client.query", [decode, client]),
+      )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(#(
+        #(
+          [
+            "import dream_postgres/client.{query}",
+            "import gleam/dynamic/decode.{at, int}",
+          ],
+          "at([0], int) query",
+        ),
+        #(
+          [
+            "import gleam/dynamic/decode.{at, int}",
+            "import dream_postgres/client.{query}",
+          ],
+          "at([0], int) query",
+        ),
+      ))
+      |> or_fail_with("Expected int bare from decode in both orders")
     }),
     it("imports a type that a prelude constructor has the name of", fn() {
       // Act

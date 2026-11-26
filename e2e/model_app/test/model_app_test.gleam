@@ -4,24 +4,24 @@
 //// expected_output.txt.
 
 import app/controllers/user_controller.{create}
-import app/models/post
-import app/models/sample
-import app/models/user
-import app/startup
-import dream/http/response
+import app/models/post.{authors, by_user, publish, titles, total}
+import app/models/sample.{amounts, echo_amount, get, insert, tags}
+import app/models/user.{count, created_at, delete, find, find_by_email, rename, search}
+import app/startup.{check_models}
+import dream/http/response.{type Response, Response}
 import dream_errors.{type Error, kind_name}
 import dream_postgres/client.{
   type Connection, type QueryError, execute, from_url, query,
   violated_constraint,
 }
-import gleam/int
-import gleam/io
-import gleam/list
+import gleam/int.{to_string}
+import gleam/io.{println}
+import gleam/list.{each, first}
 import gleam/option.{type Option, None, Some}
-import gleam/result
+import gleam/result.{map, map_error, unwrap}
 import gleam/string.{inspect, split, split_once}
-import gleam/time/calendar
-import gleam/time/timestamp
+import gleam/time/calendar.{type Date, type TimeOfDay, Date, February, TimeOfDay, utc_offset}
+import gleam/time/timestamp.{compare, from_calendar, from_unix_seconds}
 
 @external(erlang, "model_app_ffi", "get_env")
 fn get_env(name: String) -> Result(String, Nil)
@@ -29,7 +29,7 @@ fn get_env(name: String) -> Result(String, Nil)
 pub fn main() -> Nil {
   let assert Ok(url) = get_env("MODEL_APP_DATABASE_URL")
   let assert Ok(db) = from_url(url)
-  show("startup.check_models", startup.check_models(db))
+  show("startup.check_models", check_models(db))
   check_users(db)
   show_response("user_controller.show", user_controller.show(db, 1))
   show_response(
@@ -42,30 +42,30 @@ pub fn main() -> Nil {
   )
   check_posts(db)
   check_samples(db)
-  show_error("user.delete of a user with posts", user.delete(db, 1))
+  show_error("user.delete of a user with posts", delete(db, 1))
   run(db, "alter table users add column age int")
   show(
     "startup.check_models after a new column",
-    startup.check_models(db) |> result.map_error(first_line),
+    check_models(db) |> map_error(first_line),
   )
 }
 
 /// The first line of a message. The other lines hold fingerprints, which
 /// are different on each PostgreSQL version.
 fn first_line(message: String) -> String {
-  split(message, "\n") |> list.first |> result.unwrap(message)
+  split(message, "\n") |> first |> unwrap(message)
 }
 
 fn show(label: String, value: a) -> Nil {
-  io.println("| " <> label <> ": " <> inspect(value))
+  println("| " <> label <> ": " <> inspect(value))
 }
 
-fn show_response(label: String, found: response.Response) -> Nil {
-  io.println(
+fn show_response(label: String, found: Response) -> Nil {
+  println(
     "| "
     <> label
     <> ": "
-    <> int.to_string(found.status)
+    <> to_string(found.status)
     <> " "
     <> inspect(found.body),
   )
@@ -85,7 +85,7 @@ fn show_error(label: String, value: Result(a, Error(QueryError))) -> Nil {
       <> dream_errors.message(error)
       <> cause_text(dream_errors.cause(error))
   }
-  io.println("| " <> label <> ": " <> text)
+  println("| " <> label <> ": " <> text)
 }
 
 fn cause_text(cause: Option(QueryError)) -> String {
@@ -118,55 +118,55 @@ fn check_users(db: Connection) -> Nil {
     "user.create without a nickname",
     user.create(db, "bob@example.com", None),
   )
-  show("user.find", user.find(db, 1))
-  show_error("user.find of a missing user", user.find(db, 99))
-  show("user.count", user.count(db))
-  show("user.find_by_email", user.find_by_email(db, "BOB@example.com"))
-  show("user.find_by_email of no user", user.find_by_email(db, "nobody"))
+  show("user.find", find(db, 1))
+  show_error("user.find of a missing user", find(db, 99))
+  show("user.count", count(db))
+  show("user.find_by_email", find_by_email(db, "BOB@example.com"))
+  show("user.find_by_email of no user", find_by_email(db, "nobody"))
   show("user.list", user.list(db))
-  show("user.search", user.search(db, "%example.com", None))
-  show("user.search with a nickname", user.search(db, "%", Some("Ann")))
-  show("user.rename", user.rename(db, 3, Some("Bobby")))
-  show("user.find after rename", user.find(db, 3))
-  show("user.rename to NULL", user.rename(db, 3, None))
-  show("user.find after rename to NULL", user.find(db, 3))
+  show("user.search", search(db, "%example.com", None))
+  show("user.search with a nickname", search(db, "%", Some("Ann")))
+  show("user.rename", rename(db, 3, Some("Bobby")))
+  show("user.find after rename", find(db, 3))
+  show("user.rename to NULL", rename(db, 3, None))
+  show("user.find after rename to NULL", find(db, 3))
   show(
     "user.created_at is a time after 2020",
-    user.created_at(db, 1)
-      |> result.map(fn(created) {
-        timestamp.compare(created, timestamp.from_unix_seconds(1_577_836_800))
+    created_at(db, 1)
+      |> map(fn(created) {
+        compare(created, from_unix_seconds(1_577_836_800))
       }),
   )
-  show("user.delete", user.delete(db, 3))
-  show_error("user.find after delete", user.find(db, 3))
+  show("user.delete", delete(db, 3))
+  show_error("user.find after delete", find(db, 3))
 }
 
 fn check_posts(db: Connection) -> Nil {
   show("post.create", post.create(db, 1, "Hello", None))
-  show("post.publish", post.publish(db, 1))
-  show("post.publish of a missing post", post.publish(db, 99))
-  show("post.authors", post.authors(db, True))
-  show("post.by_user", post.by_user(db, 1))
-  show("post.titles", post.titles(db))
-  show("post.total", post.total(db, 1))
-  show_error("post.total of a user with no posts", post.total(db, 2))
+  show("post.publish", publish(db, 1))
+  show("post.publish of a missing post", publish(db, 99))
+  show("post.authors", authors(db, True))
+  show("post.by_user", by_user(db, 1))
+  show("post.titles", titles(db))
+  show("post.total", total(db, 1))
+  show_error("post.total of a user with no posts", total(db, 2))
 }
 
 /// Stores infinity in a row, and shows the error of sample.get for each
 /// time column that holds it.
 fn check_infinity(db: Connection) -> Nil {
   run(db, "update samples set happened_at = 'infinity' where id = 1")
-  show_error("sample.get of an infinite timestamp", sample.get(db, 1))
+  show_error("sample.get of an infinite timestamp", get(db, 1))
   run(
     db,
     "update samples set happened_at = null, happened_at_zone = '-infinity' where id = 1",
   )
-  show_error("sample.get of an infinite timestamptz", sample.get(db, 1))
+  show_error("sample.get of an infinite timestamptz", get(db, 1))
   run(
     db,
     "update samples set happened_at_zone = null, day = 'infinity' where id = 1",
   )
-  show_error("sample.get of an infinite date", sample.get(db, 1))
+  show_error("sample.get of an infinite date", get(db, 1))
   run(db, "update samples set day = null where id = 1")
 }
 
@@ -178,36 +178,36 @@ fn check_numeric(db: Connection) -> Nil {
     "0.000000000000000000000000000000000000000000000000001", "-42.10", "NaN",
     "Infinity", "-Infinity",
   ]
-  |> list.each(fn(text) {
+  |> each(fn(text) {
     show(
       "sample.echo_amount of " <> text,
-      sample.echo_amount(db, text)
-        |> result.map(fn(exact) { #(exact, exact == text) }),
+      echo_amount(db, text)
+        |> map(fn(exact) { #(exact, exact == text) }),
     )
   })
   show_error(
     "sample.echo_amount of text that is not a number",
-    sample.echo_amount(db, "12,50"),
+    echo_amount(db, "12,50"),
   )
   show(
     "sample.amounts of a text array",
-    sample.amounts(db, [Some("1.50"), None, Some("-0.001")]),
+    amounts(db, [Some("1.50"), None, Some("-0.001")]),
   )
   run(db, "update samples set amount = 99999999999999999999.99 where id = 1")
   show(
     "sample.get of a large amount",
-    sample.get(db, 1) |> result.map(fn(found) { found.amount }),
+    get(db, 1) |> map(fn(found) { found.amount }),
   )
 }
 
 /// Reads the tags of row 1 with the promise that no element is NULL: first
 /// with a NULL element, then with none, then with no array.
 fn check_element_promise(db: Connection) -> Nil {
-  show_error("sample.tags with a NULL element", sample.tags(db, 1))
+  show_error("sample.tags with a NULL element", tags(db, 1))
   run(db, "update samples set tags = '{a,b}' where id = 1")
-  show("sample.tags with no NULL element", sample.tags(db, 1))
+  show("sample.tags with no NULL element", tags(db, 1))
   run(db, "update samples set tags = null where id = 1")
-  show("sample.tags of a NULL array", sample.tags(db, 1))
+  show("sample.tags of a NULL array", tags(db, 1))
 }
 
 fn run(db: Connection, sql: String) -> Nil {
@@ -220,13 +220,13 @@ fn run(db: Connection, sql: String) -> Nil {
 
 fn check_samples(db: Connection) -> Nil {
   let happened_at =
-    timestamp.from_calendar(
-      calendar.Date(2024, calendar.February, 29),
-      calendar.TimeOfDay(13, 14, 15, 0),
-      calendar.utc_offset,
+    from_calendar(
+      Date(2024, February, 29),
+      TimeOfDay(13, 14, 15, 0),
+      utc_offset,
     )
   let inserted =
-    sample.insert(
+    insert(
       db,
       Some(7),
       Some(9_000_000_000),
@@ -246,30 +246,30 @@ fn check_samples(db: Connection) -> Nil {
       Some(<<0:size(120), 1>>),
       Some(happened_at),
       Some(happened_at),
-      Some(calendar.Date(2024, calendar.February, 29)),
-      Some(calendar.TimeOfDay(13, 14, 15, 0)),
+      Some(Date(2024, February, 29)),
+      Some(TimeOfDay(13, 14, 15, 0)),
       Some([Some("a"), None]),
       Some([Some(1), Some(2)]),
       5,
     )
   show("sample.insert", inserted)
-  show("sample.get", sample.get(db, 1))
+  show("sample.get", get(db, 1))
   show(
     "timestamp round trip",
-    sample.get(db, 1)
-      |> result.map(fn(found) { found.happened_at == Some(happened_at) }),
+    get(db, 1)
+      |> map(fn(found) { found.happened_at == Some(happened_at) }),
   )
   show(
     "array with a NULL element round trip",
-    sample.get(db, 1)
-      |> result.map(fn(found) { found.tags == Some([Some("a"), None]) }),
+    get(db, 1)
+      |> map(fn(found) { found.tags == Some([Some("a"), None]) }),
   )
   check_infinity(db)
   check_numeric(db)
   check_element_promise(db)
   show_error(
     "sample.insert of a taken label",
-    sample.insert(
+    insert(
       db,
       None,
       None,

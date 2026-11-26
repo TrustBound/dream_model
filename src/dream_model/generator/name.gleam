@@ -1,8 +1,10 @@
 //// Gleam names for SQL names: record fields and arguments from columns,
 //// functions from file names, types from folder names.
 
-import gleam/list
-import gleam/string
+import gleam/list.{filter, fold, map, reverse}
+import gleam/string.{
+  capitalise, concat, join, lowercase, slice, split, to_graphemes,
+}
 
 /// The words that Gleam reserves. A name that is one of them gets `_` at
 /// its end, for example `type_`.
@@ -31,12 +33,12 @@ type Kind {
 /// name starts with a digit.
 pub fn to_value_name(sql_name: String) -> Result(String, Nil) {
   let snake =
-    string.to_graphemes(sql_name)
-    |> list.fold(#([], Other), add_character)
-    |> fn(state: #(List(String), Kind)) { list.reverse(state.0) }
-    |> string.concat
+    to_graphemes(sql_name)
+    |> fold(#([], Other), add_character)
+    |> fn(state: #(List(String), Kind)) { reverse(state.0) }
+    |> concat
     |> collapse_underscores
-  let starts_with_digit = string.contains(digits, string.slice(snake, 0, 1))
+  let starts_with_digit = string.contains(digits, slice(snake, 0, 1))
   case snake == "" || starts_with_digit {
     True -> Error(Nil)
     False -> Ok(avoid_keyword(snake))
@@ -46,9 +48,9 @@ pub fn to_value_name(sql_name: String) -> Result(String, Nil) {
 /// Returns the Gleam type name of a folder name in snake case:
 /// `user_account` gives `UserAccount`.
 pub fn to_type_name(folder: String) -> String {
-  string.split(folder, "_")
-  |> list.map(string.capitalise)
-  |> string.concat
+  split(folder, "_")
+  |> map(capitalise)
+  |> concat
 }
 
 /// Returns the name with `_` at its end when it is a Gleam keyword.
@@ -65,7 +67,7 @@ fn add_character(
 ) -> #(List(String), Kind) {
   let #(output, previous) = state
   let kind = kind_of(character)
-  let lower = string.lowercase(character)
+  let lower = lowercase(character)
   case kind, previous {
     Upper, Lower | Upper, Digit -> #([lower, "_", ..output], kind)
     Upper, _ | Lower, _ | Digit, _ -> #([lower, ..output], kind)
@@ -86,7 +88,7 @@ fn kind_of(character: String) -> Kind {
 }
 
 fn collapse_underscores(text: String) -> String {
-  string.split(text, "_")
-  |> list.filter(fn(part) { part != "" })
-  |> string.join("_")
+  split(text, "_")
+  |> filter(fn(part) { part != "" })
+  |> join("_")
 }

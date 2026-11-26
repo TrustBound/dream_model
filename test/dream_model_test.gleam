@@ -27,7 +27,7 @@
 //// Each group writes "Finished: <group>, <n> tests, <n> failed, failed
 //// modules: [<modules>]" at its end. The mutation test reads that line.
 
-import dream_model/command_test
+import dream_model/command_test.{unit_tests}
 import dream_model/corpus_test
 import dream_model/docs_test
 import dream_model/e2e_test
@@ -50,23 +50,31 @@ import dream_model/postgres/parameter_column_test
 import dream_model/postgres/scram_test
 import dream_model/postgres/tree_test
 import dream_model/postgres/wire_test
-import dream_test/coverage
+import dream_test/coverage.{
+  type CoverageConfig, json_path, minimum_percent, show_missing,
+}
 import dream_test/matchers.{fail_with, succeed}
-import dream_test/parallel
+import dream_test/parallel.{ParallelConfig}
 import dream_test/reporters/bdd
 import dream_test/reporters/progress
-import dream_test/runner.{type RunBuilder}
+import dream_test/runner.{
+  type RunBuilder, add_suites, add_suites_with_config, exit_on_failure,
+  progress_reporter, results_reporters, run, with_arguments,
+}
 import dream_test/suite.{type TestSuite}
-import dream_test/types
+import dream_test/types.{failed, is_failure, report_tests}
 import dream_test/unit.{describe, it}
 import fixtures/attack_database
 import fixtures/model_database
-import fixtures/servers
-import gleam/int
-import gleam/io
-import gleam/list
+import fixtures/servers.{check_reachable, default_versions}
+import gleam/int.{to_string}
+import gleam/io.{println, println_error}
+import gleam/list.{
+  any, append, contains, filter, filter_map, first, flat_map, fold, length, map,
+  try_each, unique,
+}
 import gleam/result
-import gleam/string
+import gleam/string.{join, split}
 
 @external(erlang, "erlang", "halt")
 fn halt(status: Int) -> Nil
@@ -96,7 +104,7 @@ fn entries() -> List(Entry) {
     Unit("name_test", fn(_) { name_test.tests() }),
     Unit("unqualified_test", fn(_) { unqualified_test.tests() }),
     Unit("reason_test", fn(_) { reason_test.tests() }),
-    Unit("command_test", fn(_) { command_test.unit_tests() }),
+    Unit("command_test", fn(_) { unit_tests() }),
     Unit("wire_test", wire_test.tests),
     Unit("tree_test", tree_test.tests),
     Unit("nullability_test", nullability_test.tests),
@@ -131,21 +139,18 @@ pub fn main() -> Nil {
   let selected = select(entries())
   let groups = make_groups(selected, versions)
   let needs_databases =
-    list.any(selected, fn(entry) {
+    any(selected, fn(entry) {
       case entry {
         Unit(..) -> False
         PerVersion(..) | EndToEnd(..) -> True
       }
     })
   let prepared = {
-    use Nil <- result.try(list.try_each(
-      [15, ..versions],
-      servers.check_reachable,
-    ))
+    use Nil <- result.try(try_each([15, ..versions], check_reachable))
     case needs_databases {
       True -> {
-        use Nil <- result.try(list.try_each(versions, attack_database.create))
-        list.try_each(versions, model_database.create)
+        use Nil <- result.try(try_each(versions, attack_database.create))
+        try_each(versions, model_database.create)
       }
       False -> Ok(Nil)
     }
@@ -158,7 +163,7 @@ pub fn main() -> Nil {
         read_environment_variable("DREAM_MODEL_TEST_MODULES") != Error(Nil),
       )
     Error(message) -> {
-      io.println_error(message)
+      println_error(message)
       halt(1)
     }
   }
@@ -171,15 +176,15 @@ fn select(all: List(Entry)) -> List(Entry) {
     Error(Nil) -> all
     Ok(text) -> {
       let names =
-        string.split(text, " ")
-        |> list.filter(fn(name) { name != "" })
-      let known = list.map(all, fn(entry) { entry.module })
-      case list.filter(names, fn(name) { !list.contains(known, name) }) {
-        [] -> list.filter(all, fn(entry) { list.contains(names, entry.module) })
+        split(text, " ")
+        |> filter(fn(name) { name != "" })
+      let known = map(all, fn(entry) { entry.module })
+      case filter(names, fn(name) { !contains(known, name) }) {
+        [] -> filter(all, fn(entry) { contains(names, entry.module) })
         unknown -> {
-          io.println_error(
+          println_error(
             "DREAM_MODEL_TEST_MODULES names no test module: "
-            <> string.join(unknown, " "),
+            <> join(unknown, " "),
           )
           halt(1)
           []
@@ -190,18 +195,18 @@ fn select(all: List(Entry)) -> List(Entry) {
 }
 
 fn make_groups(selected: List(Entry), versions: List(Int)) -> List(Group) {
-  let first_version = list.first(versions) |> result.unwrap(16)
+  let first_version = first(versions) |> result.unwrap(16)
   let unit_suites =
-    list.filter_map(selected, fn(entry) {
+    filter_map(selected, fn(entry) {
       case entry {
         Unit(module:, suite:) -> Ok(#(module, suite(first_version)))
         _ -> Error(Nil)
       }
     })
   let version_groups =
-    list.map(versions, fn(version) {
+    map(versions, fn(version) {
       let suites =
-        list.filter_map(selected, fn(entry) {
+        filter_map(selected, fn(entry) {
           case entry {
             PerVersion(module:, suite:) -> Ok(#(module, suite(version)))
             _ -> Error(Nil)
@@ -210,28 +215,28 @@ fn make_groups(selected: List(Entry), versions: List(Int)) -> List(Group) {
       // The end-to-end tests of one version share a copy of the app, so
       // they run one at a time.
       let one_at_a_time =
-        list.filter_map(selected, fn(entry) {
+        filter_map(selected, fn(entry) {
           case entry {
             EndToEnd(module:, suite:) -> Ok(#(module, suite(version)))
             _ -> Error(Nil)
           }
         })
-      Group("PostgreSQL " <> int.to_string(version), suites, one_at_a_time)
+      Group("PostgreSQL " <> to_string(version), suites, one_at_a_time)
     })
   [Group("the tests of every version", unit_suites, []), ..version_groups]
-  |> list.filter(fn(group) { group.suites != [] || group.one_at_a_time != [] })
+  |> filter(fn(group) { group.suites != [] || group.one_at_a_time != [] })
 }
 
 fn suites_of(pairs: List(#(String, TestSuite))) -> List(TestSuite) {
-  list.map(pairs, fn(pair) { pair.1 })
+  map(pairs, fn(pair) { pair.1 })
 }
 
 /// Adds the suites of a group to a run, with the settings of the run.
 fn add_group(builder: RunBuilder, group: Group) -> RunBuilder {
   builder
-  |> runner.add_suites(suites_of(group.suites))
-  |> runner.add_suites_with_config(
-    parallel.ParallelConfig(max_concurrency: 1, default_timeout_ms: 300_000),
+  |> add_suites(suites_of(group.suites))
+  |> add_suites_with_config(
+    ParallelConfig(max_concurrency: 1, default_timeout_ms: 300_000),
     suites_of(group.one_at_a_time),
   )
 }
@@ -245,13 +250,13 @@ fn run_groups(groups: List(Group), versions: List(Int), filtered: Bool) -> Nil {
     || read_environment_variable("DREAM_MODEL_TEST_COVERAGE") == Ok("off")
   let builder = case get_arguments() {
     [_, ..] ->
-      list.fold(groups, runner.new([]), add_group)
+      fold(groups, runner.new([]), add_group)
       |> runner.default_timeout_ms(120_000)
-      |> runner.progress_reporter(progress.new())
-      |> runner.results_reporters([bdd.new()])
+      |> progress_reporter(progress.new())
+      |> results_reporters([bdd.new()])
     [] ->
-      runner.new([describe("the test groups", list.map(groups, group_test))])
-      |> runner.max_concurrency(list.length(groups))
+      runner.new([describe("the test groups", map(groups, group_test))])
+      |> runner.max_concurrency(length(groups))
       |> runner.default_timeout_ms(3_600_000)
   }
   let builder = case coverage_off {
@@ -259,8 +264,8 @@ fn run_groups(groups: List(Group), versions: List(Int), filtered: Bool) -> Nil {
     False -> runner.coverage(builder, coverage_config(versions))
   }
   builder
-  |> runner.exit_on_failure()
-  |> runner.run()
+  |> exit_on_failure()
+  |> run()
   Nil
 }
 
@@ -269,37 +274,37 @@ fn run_groups(groups: List(Group), versions: List(Int), filtered: Bool) -> Nil {
 /// report. The last line names the test modules with a failed test.
 fn group_test(group: Group) {
   it(group.name, fn() {
-    io.println("Started: " <> group.name)
+    println("Started: " <> group.name)
     let report =
       add_group(runner.new([]), group)
       |> runner.default_timeout_ms(120_000)
-      |> runner.results_reporters([bdd.new()])
-      |> runner.with_arguments([])
-      |> runner.run()
+      |> results_reporters([bdd.new()])
+      |> with_arguments([])
+      |> run()
     let failures =
-      types.report_tests(report)
-      |> list.filter(fn(result) { types.is_failure(result.status) })
+      report_tests(report)
+      |> filter(fn(result) { is_failure(result.status) })
     let modules =
-      list.flat_map(failures, fn(result) {
-        let suite_name = list.first(result.groups) |> result.unwrap("")
-        list.append(group.suites, group.one_at_a_time)
-        |> list.filter(fn(pair) { suite.name(pair.1) == suite_name })
-        |> list.map(fn(pair) { pair.0 })
+      flat_map(failures, fn(result) {
+        let suite_name = first(result.groups) |> result.unwrap("")
+        append(group.suites, group.one_at_a_time)
+        |> filter(fn(pair) { suite.name(pair.1) == suite_name })
+        |> map(fn(pair) { pair.0 })
       })
-      |> list.unique
-    let count = int.to_string(list.length(failures))
-    io.println(
+      |> unique
+    let count = to_string(length(failures))
+    println(
       "Finished: "
       <> group.name
       <> ", "
-      <> int.to_string(list.length(types.report_tests(report)))
+      <> to_string(length(report_tests(report)))
       <> " tests, "
       <> count
       <> " failed, failed modules: ["
-      <> string.join(modules, " ")
+      <> join(modules, " ")
       <> "]",
     )
-    case types.failed(report) {
+    case failed(report) {
       False -> Ok(succeed())
       True ->
         Ok(fail_with(
@@ -312,13 +317,13 @@ fn group_test(group: Group) {
   })
 }
 
-fn coverage_config(versions: List(Int)) -> coverage.CoverageConfig {
+fn coverage_config(versions: List(Int)) -> CoverageConfig {
   let config =
     coverage.new()
-    |> coverage.show_missing()
-    |> coverage.json_path("build/coverage/coverage.json")
-  case versions == servers.default_versions {
-    True -> coverage.minimum_percent(config, 100.0)
+    |> show_missing()
+    |> json_path("build/coverage/coverage.json")
+  case versions == default_versions {
+    True -> minimum_percent(config, 100.0)
     False -> config
   }
 }

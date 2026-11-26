@@ -16,19 +16,21 @@
 //// error that the data checks do not expect, for example a FULL JOIN
 //// condition that the planner cannot run.
 
-import dream_model/nullability
-import dream_model/postgres/tree
-import dream_model/postgres/wire
-import fixtures/harness
-import fixtures/servers
-import fuzz/query.{type Generator}
+import dream_model/nullability.{
+  type Analysis, type Analyzer, DatabaseFailed, TreeFailed, analyze,
+}
+import dream_model/postgres/tree.{QueryFailed}
+import dream_model/postgres/wire.{type Connection, ServerError, simple_query}
+import fixtures/harness.{Broken, PromiseEnforced, RunFailed, Sound, check}
+import fixtures/servers.{database_name, default_database}
+import fuzz/query.{type Generator, add_schema_facts, add_view, new, view}
 import fuzz/random.{type Random}
 import fuzz/schema.{type DataSet, type Schema, Relation}
-import gleam/int
-import gleam/list
+import gleam/int.{to_string}
+import gleam/list.{append, flat_map, fold, length, map, reverse, take, try_each}
 import gleam/option.{type Option, Some}
-import gleam/result
-import gleam/string
+import gleam/result.{map_error, replace, try}
+import gleam/string.{join}
 
 /// The size of a fuzz run.
 pub type Settings {
@@ -53,13 +55,13 @@ pub type Report {
 }
 
 type Analyzed {
-  Analyzed(sql: String, analysis: nullability.Analysis)
+  Analyzed(sql: String, analysis: Analysis)
 }
 
 /// The name of the database of a fuzz run, with the prefix of
 /// `servers.database_name`.
 pub fn database(seed: Int) -> String {
-  servers.database_name("fuzz_" <> int.to_string(seed))
+  database_name("fuzz_" <> to_string(seed))
 }
 
 /// Runs the fuzzer, and drops its database at the end.
@@ -67,7 +69,7 @@ pub fn run(settings: Settings) -> Report {
   let empty = Report(settings, 0, 0, 0, 0, 0, 0, 0, [])
   let #(report, _) =
     random.numbers(1, settings.schemas)
-    |> list.fold(#(empty, random.new(settings.seed)), fn(state, number) {
+    |> fold(#(empty, random.new(settings.seed)), fn(state, number) {
       let #(report, random) = state
       run_schema(report, random, number)
     })
@@ -76,32 +78,32 @@ pub fn run(settings: Settings) -> Report {
 }
 
 fn drop_database(settings: Settings) -> Result(Nil, String) {
-  let admin = servers.connect(settings.version, servers.default_database)
+  let admin = servers.connect(settings.version, default_database)
   let dropped =
-    wire.simple_query(
+    simple_query(
       admin,
       "drop database if exists " <> database(settings.seed) <> " with (force)",
     )
   let _ = wire.close(admin)
   dropped
-  |> result.replace(Nil)
-  |> result.map_error(wire.error_to_string)
+  |> replace(Nil)
+  |> map_error(wire.error_to_string)
 }
 
 fn create_database(settings: Settings) -> Result(Nil, String) {
-  use Nil <- result.try(drop_database(settings))
-  let admin = servers.connect(settings.version, servers.default_database)
+  use Nil <- try(drop_database(settings))
+  let admin = servers.connect(settings.version, default_database)
   let created =
     // FILE_COPY does not write the template database into the WAL, so the
     // many databases of a run do not fill the disk with WAL.
-    wire.simple_query(
+    simple_query(
       admin,
       "create database " <> database(settings.seed) <> " strategy = file_copy",
     )
   let _ = wire.close(admin)
   created
-  |> result.replace(Nil)
-  |> result.map_error(wire.error_to_string)
+  |> replace(Nil)
+  |> map_error(wire.error_to_string)
 }
 
 fn run_schema(
@@ -113,18 +115,18 @@ fn run_schema(
   let #(schema, random) = schema.generate(random, settings.version)
   let label =
     "PostgreSQL "
-    <> int.to_string(settings.version)
+    <> to_string(settings.version)
     <> ", seed "
-    <> int.to_string(settings.seed)
+    <> to_string(settings.seed)
     <> ", schema "
-    <> int.to_string(number)
+    <> to_string(number)
   let created = {
-    use Nil <- result.try(create_database(settings))
+    use Nil <- try(create_database(settings))
     let connection = servers.connect(settings.version, database(settings.seed))
     let made =
-      list.try_each(schema.statements, fn(statement) {
-        wire.simple_query(connection, statement)
-        |> result.map_error(fn(error) {
+      try_each(schema.statements, fn(statement) {
+        simple_query(connection, statement)
+        |> map_error(fn(error) {
           statement <> ": " <> wire.error_to_string(error)
         })
       })
@@ -143,16 +145,16 @@ fn run_schema(
     )
     Ok(connection) -> {
       let generator =
-        query.new(random, schema.tables, settings.version)
-        |> query.add_schema_facts(schema.column_types, schema.conflict_targets)
+        new(random, schema.tables, settings.version)
+        |> add_schema_facts(schema.column_types, schema.conflict_targets)
       let #(generator, views) = create_views(connection, generator)
       let #(report, analyzed, generator) =
         analyze_queries(report, generator, label)
       let #(data_sets, random) = schema.data_sets(generator.random, schema)
-      let outcomes = list.map(analyzed, check_query(connection, _, data_sets))
+      let outcomes = map(analyzed, check_query(connection, _, data_sets))
       let failures =
-        list.flat_map(outcomes, fn(outcome) { outcome.1 })
-        |> list.map(fn(problem) {
+        flat_map(outcomes, fn(outcome) { outcome.1 })
+        |> map(fn(problem) {
           describe_failure(label, problem, schema, views, data_sets)
         })
       let run_failed = list.count(outcomes, fn(outcome) { outcome.0 })
@@ -164,26 +166,26 @@ fn run_schema(
 }
 
 fn add_failures(report: Report, failures: List(String)) -> Report {
-  Report(..report, failures: list.append(report.failures, failures))
+  Report(..report, failures: append(report.failures, failures))
 }
 
 fn create_views(
-  connection: wire.Connection,
+  connection: Connection,
   generator: Generator,
 ) -> #(Generator, List(String)) {
   let #(count, random) = random.between(generator.random, 0, 2)
   let generator = query.Generator(..generator, random:)
   random.numbers(0, count - 1)
-  |> list.take(count)
-  |> list.fold(#(generator, []), fn(state, index) {
+  |> take(count)
+  |> fold(#(generator, []), fn(state, index) {
     let #(generator, views) = state
-    let #(#(sql, columns), generator) = query.view(generator)
-    let name = "v" <> int.to_string(index)
+    let #(#(sql, columns), generator) = view(generator)
+    let name = "v" <> to_string(index)
     let statement = "create view " <> name <> " as " <> sql
-    case wire.simple_query(connection, statement) {
+    case simple_query(connection, statement) {
       Ok(_) -> #(
-        query.add_view(generator, Relation(name, columns)),
-        list.append(views, [statement]),
+        add_view(generator, Relation(name, columns)),
+        append(views, [statement]),
       )
       Error(_) -> #(generator, views)
     }
@@ -210,36 +212,36 @@ fn analyze_queries(
     Ok(analyzer) -> {
       let #(report, analyzed, generator, analyzer) =
         random.numbers(1, settings.queries)
-        |> list.fold(#(report, [], generator, analyzer), fn(state, _) {
+        |> fold(#(report, [], generator, analyzer), fn(state, _) {
           let #(report, analyzed, generator, analyzer) = state
           let #(depth, random) = random.between(generator.random, 1, 3)
           let generator = query.Generator(..generator, random:)
           let #(sql, generator) = query.statement(generator, depth)
           let #(report, found, analyzer) =
             analyze_one(report, analyzer, sql, label)
-          #(report, list.append(found, analyzed), generator, analyzer)
+          #(report, append(found, analyzed), generator, analyzer)
         })
       let _ = nullability.close(analyzer)
-      #(report, list.reverse(analyzed), generator)
+      #(report, reverse(analyzed), generator)
     }
   }
 }
 
 fn analyze_one(
   report: Report,
-  analyzer: nullability.Analyzer,
+  analyzer: Analyzer,
   sql: String,
   label: String,
-) -> #(Report, List(Analyzed), nullability.Analyzer) {
+) -> #(Report, List(Analyzed), Analyzer) {
   let report = Report(..report, generated: report.generated + 1)
-  case nullability.analyze(analyzer, sql) {
+  case analyze(analyzer, sql) {
     Ok(#(analysis, analyzer)) -> #(
       count_analysis(report, analysis),
       [Analyzed(sql, analysis)],
       analyzer,
     )
-    Error(nullability.DatabaseFailed(wire.ServerError(_)))
-    | Error(nullability.TreeFailed(tree.QueryFailed(wire.ServerError(_)))) -> #(
+    Error(DatabaseFailed(ServerError(_)))
+    | Error(TreeFailed(QueryFailed(ServerError(_)))) -> #(
       Report(..report, rejected_by_postgres: report.rejected_by_postgres + 1),
       [],
       analyzer,
@@ -258,26 +260,26 @@ fn analyze_one(
   }
 }
 
-fn count_analysis(report: Report, analysis: nullability.Analysis) -> Report {
+fn count_analysis(report: Report, analysis: Analysis) -> Report {
   let not_null = list.count(analysis.columns, fn(column) { column.not_null })
   let optional =
     list.count(analysis.parameters, fn(parameter) { parameter.optional })
   Report(
     ..report,
     analyzed: report.analyzed + 1,
-    columns: report.columns + list.length(analysis.columns),
+    columns: report.columns + length(analysis.columns),
     not_null_columns: report.not_null_columns + not_null,
     optional_parameters: report.optional_parameters + optional,
   )
 }
 
 fn check_query(
-  connection: wire.Connection,
+  connection: Connection,
   analyzed: Analyzed,
   data_sets: List(DataSet),
 ) -> #(Bool, List(String)) {
   let outcome =
-    harness.check(
+    check(
       connection,
       analyzed.analysis,
       "fuzz",
@@ -287,22 +289,22 @@ fn check_query(
       "select 1",
     )
   let #(run_failed, problems) = case outcome {
-    harness.Sound -> #(False, [])
-    harness.Broken(problems) -> #(False, problems)
-    harness.PromiseEnforced(message) -> #(False, [message])
-    harness.RunFailed(_) -> #(True, [])
+    Sound -> #(False, [])
+    Broken(problems) -> #(False, problems)
+    PromiseEnforced(message) -> #(False, [message])
+    RunFailed(_) -> #(True, [])
   }
   #(
     run_failed,
-    list.map(problems, fn(problem) { problem <> "\n  query: " <> analyzed.sql }),
+    map(problems, fn(problem) { problem <> "\n  query: " <> analyzed.sql }),
   )
 }
 
 /// A value for each parameter that its type accepts: the checks run the
 /// query with these values, then with NULL in place of each `Option`
 /// parameter.
-fn base_parameters(analysis: nullability.Analysis) -> List(Option(String)) {
-  list.map(analysis.parameters, fn(parameter) {
+fn base_parameters(analysis: Analysis) -> List(Option(String)) {
+  map(analysis.parameters, fn(parameter) {
     Some(base_value(parameter.type_oid))
   })
 }
@@ -325,14 +327,13 @@ fn describe_failure(
   data_sets: List(DataSet),
 ) -> String {
   let data =
-    list.map(data_sets, fn(data_set) {
+    map(data_sets, fn(data_set) {
       "  data " <> data_set.0 <> ": " <> data_set.1
     })
   [
     label <> ": " <> problem,
-    "  schema: "
-      <> string.join(list.append(schema.statements, views), ";\n    "),
+    "  schema: " <> join(append(schema.statements, views), ";\n    "),
     ..data
   ]
-  |> string.join("\n")
+  |> join("\n")
 }

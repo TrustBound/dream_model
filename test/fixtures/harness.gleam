@@ -5,13 +5,21 @@
 ////
 //// Each run is inside a transaction that is rolled back.
 
-import dream_model/nullability.{type Analysis, type Column}
-import dream_model/nullability/reason
-import dream_model/postgres/wire
-import gleam/list
+import dream_model/nullability.{
+  type Analysis, type Column, broken_promise_to_string, check_row,
+}
+import dream_model/nullability/reason.{NotNullHint}
+import dream_model/postgres/wire.{
+  type Connection, type WireError, ServerError, error_to_string, execute,
+  get_field, simple_query,
+}
+import gleam/list.{
+  append, contains, filter, filter_map, flat_map, index_map, length, repeat,
+  try_fold, unique, zip,
+}
 import gleam/option.{type Option, None, Some}
-import gleam/result
-import gleam/string
+import gleam/result.{map_error, try}
+import gleam/string.{inspect}
 
 /// What the data checks found.
 pub type Outcome {
@@ -44,7 +52,7 @@ type Found {
 /// Runs the query on each data set with each parameter set, and checks
 /// the analysis. With no parameter sets, every parameter is `"1"`.
 pub fn check(
-  connection: wire.Connection,
+  connection: Connection,
   analysis: Analysis,
   name: String,
   sql: String,
@@ -52,15 +60,14 @@ pub fn check(
   parameter_sets: Option(List(List(Option(String)))),
   reset: String,
 ) -> Outcome {
-  let count = list.length(analysis.parameters)
-  let parameter_sets =
-    option.unwrap(parameter_sets, [list.repeat(Some("1"), count)])
+  let count = length(analysis.parameters)
+  let parameter_sets = option.unwrap(parameter_sets, [repeat(Some("1"), count)])
   let runs =
-    list.flat_map(data_sets, fn(data_set) {
+    flat_map(data_sets, fn(data_set) {
       list.map(parameter_sets, fn(parameters) { #(data_set, parameters) })
     })
   let checked =
-    list.try_fold(runs, Found([], []), fn(found, run) {
+    try_fold(runs, Found([], []), fn(found, run) {
       let #(#(label, setup), parameters) = run
       check_run(
         connection,
@@ -74,8 +81,8 @@ pub fn check(
       )
       |> result.map(fn(more) {
         Found(
-          list.append(found.breaks, more.breaks),
-          list.append(found.promises, more.promises),
+          append(found.breaks, more.breaks),
+          append(found.promises, more.promises),
         )
       })
     })
@@ -93,13 +100,13 @@ pub fn check(
           first_parameters,
           reset,
         )
-      decide(list.append(found.breaks, parameter_breaks), found.promises)
+      decide(append(found.breaks, parameter_breaks), found.promises)
     }
   }
 }
 
 fn decide(breaks: List(String), promises: List(String)) -> Outcome {
-  case list.unique(breaks), promises {
+  case unique(breaks), promises {
     [_, ..] as breaks, _ -> Broken(breaks)
     [], [first, ..] -> PromiseEnforced(first)
     [], [] -> Sound
@@ -107,7 +114,7 @@ fn decide(breaks: List(String), promises: List(String)) -> Outcome {
 }
 
 fn check_run(
-  connection: wire.Connection,
+  connection: Connection,
   analysis: Analysis,
   name: String,
   sql: String,
@@ -120,12 +127,10 @@ fn check_run(
   rollback(connection)
   case ran {
     Error(error) ->
-      case list.contains(rejected_by_data, code(error)) {
+      case contains(rejected_by_data, code(error)) {
         True -> Ok(Found([], []))
         False ->
-          Error(
-            "run failed on " <> label <> ": " <> wire.error_to_string(error),
-          )
+          Error("run failed on " <> label <> ": " <> error_to_string(error))
       }
     Ok(rows) -> Ok(check_rows(analysis.columns, rows, name, label, parameters))
   }
@@ -139,11 +144,11 @@ fn check_rows(
   parameters: List(Option(String)),
 ) -> Found {
   let breaks =
-    list.flat_map(rows, fn(row) {
-      list.zip(columns, row)
-      |> list.filter_map(fn(pair) {
+    flat_map(rows, fn(row) {
+      zip(columns, row)
+      |> filter_map(fn(pair) {
         let #(column, value) = pair
-        case value, column.not_null && column.reason != reason.NotNullHint {
+        case value, column.not_null && column.reason != NotNullHint {
           None, True ->
             Ok(
               "'"
@@ -151,7 +156,7 @@ fn check_rows(
               <> "' typed never NULL but NULL came back (data: "
               <> label
               <> ", params: "
-              <> string.inspect(parameters)
+              <> inspect(parameters)
               <> ")",
             )
           _, _ -> Error(Nil)
@@ -159,13 +164,10 @@ fn check_rows(
       })
     })
   let promises =
-    list.filter_map(rows, fn(row) {
-      nullability.check_row(columns, name, row)
-      |> result.map_error(fn(promise) {
-        nullability.broken_promise_to_string(promise)
-        <> " (data: "
-        <> label
-        <> ")"
+    filter_map(rows, fn(row) {
+      check_row(columns, name, row)
+      |> map_error(fn(promise) {
+        broken_promise_to_string(promise) <> " (data: " <> label <> ")"
       })
       |> flip
     })
@@ -185,7 +187,7 @@ fn flip(checked: Result(Nil, String)) -> Result(String, Nil) {
 /// come from the NULL, for example an INSERT that leaves out a NOT NULL
 /// column.
 fn check_parameters(
-  connection: wire.Connection,
+  connection: Connection,
   analysis: Analysis,
   sql: String,
   data_set: #(String, String),
@@ -193,7 +195,7 @@ fn check_parameters(
   reset: String,
 ) -> List(String) {
   let base = case base {
-    [] -> list.repeat(Some("1"), list.length(analysis.parameters))
+    [] -> repeat(Some("1"), length(analysis.parameters))
     _ -> base
   }
   let base_run = run(connection, sql, data_set.1, base, reset)
@@ -206,7 +208,7 @@ fn check_parameters(
 }
 
 fn check_null_parameters(
-  connection: wire.Connection,
+  connection: Connection,
   analysis: Analysis,
   sql: String,
   data_set: #(String, String),
@@ -214,10 +216,10 @@ fn check_null_parameters(
   reset: String,
 ) -> List(String) {
   analysis.parameters
-  |> list.filter(fn(parameter) { parameter.optional })
-  |> list.filter_map(fn(parameter) {
+  |> filter(fn(parameter) { parameter.optional })
+  |> filter_map(fn(parameter) {
     let parameters =
-      list.index_map(base, fn(value, index) {
+      index_map(base, fn(value, index) {
         case index + 1 == parameter.position {
           True -> None
           False -> value
@@ -227,13 +229,13 @@ fn check_null_parameters(
     rollback(connection)
     case ran {
       Error(error) ->
-        case list.contains(null_rejected, code(error)) {
+        case contains(null_rejected, code(error)) {
           True ->
             Ok(
               "$"
-              <> string.inspect(parameter.position)
+              <> inspect(parameter.position)
               <> " typed Option but PostgreSQL rejected NULL: "
-              <> wire.error_to_string(error),
+              <> error_to_string(error),
             )
           False -> Error(Nil)
         }
@@ -243,29 +245,29 @@ fn check_null_parameters(
 }
 
 fn run(
-  connection: wire.Connection,
+  connection: Connection,
   sql: String,
   setup: String,
   parameters: List(Option(String)),
   reset: String,
-) -> Result(List(List(Option(String))), wire.WireError) {
-  use _ <- result.try(wire.simple_query(connection, "begin"))
-  use _ <- result.try(wire.simple_query(connection, reset))
-  use _ <- result.try(case setup {
+) -> Result(List(List(Option(String))), WireError) {
+  use _ <- try(simple_query(connection, "begin"))
+  use _ <- try(simple_query(connection, reset))
+  use _ <- try(case setup {
     "" -> Ok([])
-    _ -> wire.simple_query(connection, setup)
+    _ -> simple_query(connection, setup)
   })
-  wire.execute(connection, sql, parameters)
+  execute(connection, sql, parameters)
 }
 
-fn rollback(connection: wire.Connection) -> Nil {
-  let _ = wire.simple_query(connection, "rollback")
+fn rollback(connection: Connection) -> Nil {
+  let _ = simple_query(connection, "rollback")
   Nil
 }
 
-fn code(error: wire.WireError) -> String {
+fn code(error: WireError) -> String {
   case error {
-    wire.ServerError(fields) -> wire.get_field(fields, "C") |> result.unwrap("")
+    ServerError(fields) -> get_field(fields, "C") |> result.unwrap("")
     _ -> ""
   }
 }

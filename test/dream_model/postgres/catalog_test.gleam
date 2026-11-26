@@ -1,17 +1,17 @@
 //// Tests for `dream_model/postgres/catalog`, on the attack database.
 
 import dream_model/postgres/catalog.{Attribute, Domain, Function}
-import dream_model/postgres/wire
+import dream_model/postgres/wire.{type Connection, close, simple_query}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
-import fixtures/attack_database
-import fixtures/servers
-import gleam/int
-import gleam/list
+import fixtures/attack_database.{database}
+import fixtures/servers.{connect}
+import gleam/int.{compare, parse}
+import gleam/list.{filter_map, key_find, sort}
 import gleam/option.{Some}
-import gleam/result
-import gleam/string
+import gleam/result.{replace, try, unwrap}
+import gleam/string.{join}
 
 pub fn tests(version: Int) -> TestSuite {
   describe("dream_model/postgres/catalog", [
@@ -38,7 +38,7 @@ pub fn tests(version: Int) -> TestSuite {
       version,
       fn(catalog, oids) {
         catalog.get_relation(catalog, oid_of(oids, "users"))
-        |> result.try(catalog.get_attribute(_, 2))
+        |> try(catalog.get_attribute(_, 2))
       },
       Ok(Attribute(2, "email", True, 25, False)),
     ),
@@ -47,7 +47,7 @@ pub fn tests(version: Int) -> TestSuite {
       version,
       fn(catalog, oids) {
         catalog.get_relation(catalog, oid_of(oids, "contacts"))
-        |> result.try(catalog.get_attribute_by_name(_, "email"))
+        |> try(catalog.get_attribute_by_name(_, "email"))
         |> result.map(fn(attribute) { attribute.has_domain_type })
       },
       Ok(True),
@@ -77,9 +77,7 @@ pub fn tests(version: Int) -> TestSuite {
       version,
       fn(catalog, oids) {
         catalog.get_relation(catalog, oid_of(oids, "checked"))
-        |> result.map(fn(relation) {
-          list.sort(relation.check_columns, int.compare)
-        })
+        |> result.map(fn(relation) { sort(relation.check_columns, compare) })
       },
       Ok([2, 3]),
     ),
@@ -177,7 +175,7 @@ pub fn tests(version: Int) -> TestSuite {
       version,
       fn(catalog, _oids) {
         catalog.get_relation(catalog, 1)
-        |> result.replace(Nil)
+        |> replace(Nil)
       },
       Error(Nil),
     ),
@@ -208,7 +206,7 @@ const names = [
 ]
 
 fn oid_of(oids: List(#(String, Int)), name: String) -> Int {
-  list.key_find(oids, name) |> result.unwrap(0)
+  key_find(oids, name) |> unwrap(0)
 }
 
 fn catalog_case(
@@ -219,7 +217,7 @@ fn catalog_case(
 ) {
   it(name, fn() {
     // Arrange
-    let connection = servers.connect(version, attack_database.database())
+    let connection = connect(version, database())
     let oids = read_oids(connection)
     let relations =
       names
@@ -232,7 +230,7 @@ fn catalog_case(
       ])
     let assert Ok(loaded) =
       catalog.load(loaded, connection, relations, [2803, 669], [])
-    let _ = wire.close(connection)
+    let _ = close(connection)
 
     // Assert
     read(loaded, oids)
@@ -242,19 +240,19 @@ fn catalog_case(
   })
 }
 
-fn read_oids(connection: wire.Connection) -> List(#(String, Int)) {
+fn read_oids(connection: Connection) -> List(#(String, Int)) {
   let assert Ok(rows) =
-    wire.simple_query(
+    simple_query(
       connection,
       "select relname, oid from pg_class where relname in ("
         <> list.map(names, fn(pair) { "'" <> pair.0 <> "'" })
-      |> string.join(", ")
+      |> join(", ")
         <> ") union all select 'strict_text', 'strict_text'::regtype::oid",
     )
-  list.filter_map(rows, fn(row) {
+  filter_map(rows, fn(row) {
     case row {
       [Some(name), Some(oid)] ->
-        int.parse(oid) |> result.map(fn(oid) { #(name, oid) })
+        parse(oid) |> result.map(fn(oid) { #(name, oid) })
       _ -> Error(Nil)
     }
   })

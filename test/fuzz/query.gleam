@@ -18,13 +18,16 @@
 import fuzz/random.{type Random}
 import fuzz/schema.{
   type Kind, type Relation, BoolKind, IntArrayKind, IntKind, Relation, TextKind,
-  TimestampKind,
+  TimestampKind, kind_sql,
 }
-import gleam/int
-import gleam/list
+import gleam/int.{max, to_string}
+import gleam/list.{
+  any, append, filter_map, flat_map, flatten, fold, index_map, key_find, length,
+  map, map2, reverse, sort, take, unique,
+}
 import gleam/option.{type Option, None, Some}
-import gleam/result
-import gleam/string
+import gleam/result.{unwrap}
+import gleam/string.{compare, join, starts_with}
 
 /// A column that an expression can refer to.
 pub type ScopeColumn {
@@ -77,7 +80,7 @@ pub fn add_schema_facts(
 
 /// Adds a view that queries can read.
 pub fn add_view(generator: Generator, view: Relation) -> Generator {
-  Generator(..generator, views: list.append(generator.views, [view]))
+  Generator(..generator, views: append(generator.views, [view]))
 }
 
 fn roll(
@@ -114,7 +117,7 @@ fn weighted(
 
 fn alias(generator: Generator, prefix: String) -> #(String, Generator) {
   let number = generator.aliases + 1
-  #(prefix <> int.to_string(number), Generator(..generator, aliases: number))
+  #(prefix <> to_string(number), Generator(..generator, aliases: number))
 }
 
 fn weight(holds: Bool, value: Float) -> Float {
@@ -125,7 +128,7 @@ fn weight(holds: Bool, value: Float) -> Float {
 }
 
 fn scope_of(alias: String, columns: Columns) -> Scope {
-  list.map(columns, fn(column) {
+  map(columns, fn(column) {
     ScopeColumn(alias <> "." <> column.0, column.1, column.0)
   })
 }
@@ -241,14 +244,9 @@ fn from_item(
       let #(name, generator) = alias(generator, "g")
       let #(count, generator) = between(generator, 0, 2)
       #(
-        #(
-          "generate_series(1, "
-            <> int.to_string(count)
-            <> ") "
-            <> name
-            <> "(gi)",
-          [ScopeColumn(name <> ".gi", IntKind, "gi")],
-        ),
+        #("generate_series(1, " <> to_string(count) <> ") " <> name <> "(gi)", [
+          ScopeColumn(name <> ".gi", IntKind, "gi"),
+        ]),
         generator,
       )
     }
@@ -278,14 +276,14 @@ fn values_item(generator: Generator) -> #(#(String, Scope), Generator) {
   let #(count, generator) = between(generator, 1, 3)
   let #(rows, generator) =
     random.numbers(1, count)
-    |> list.fold(#([], generator), fn(state, _) {
+    |> fold(#([], generator), fn(state, _) {
       let #(rows, generator) = state
       let #(number, generator) = choose(generator, ["1", "2", "null::int"], "1")
       let #(text, generator) = choose(generator, ["'a'", "null::text"], "'a'")
       #(["(" <> number <> ", " <> text <> ")", ..rows], generator)
     })
   #(
-    #("(values " <> string.join(rows, ", ") <> ") " <> name <> "(vi, vt)", [
+    #("(values " <> join(rows, ", ") <> ") " <> name <> "(vi, vt)", [
       ScopeColumn(name <> ".vi", IntKind, "vi"),
       ScopeColumn(name <> ".vt", TextKind, "vt"),
     ]),
@@ -332,17 +330,17 @@ fn join_item(
       InnerJoin,
     )
   let right_outer = case kind {
-    InnerJoin | LeftJoin | CrossJoin -> list.append(outer, left)
+    InnerJoin | LeftJoin | CrossJoin -> append(outer, left)
     RightJoin | FullJoin -> outer
   }
   let #(#(right_sql, right), generator) =
     from_item(generator, depth - 1, ctes, right_outer)
-  let lateral = string.starts_with(right_sql, "lateral")
+  let lateral = starts_with(right_sql, "lateral")
   let kind = case lateral, kind {
     True, RightJoin | True, FullJoin -> LeftJoin
     _, _ -> kind
   }
-  let both = list.append(left, right)
+  let both = append(left, right)
   let #(using, generator) = chance(generator, 0.25)
   let common = common_columns(left, right)
   case kind, common, using && !lateral {
@@ -355,7 +353,7 @@ fn join_item(
         choose(generator, common, #("id", IntKind))
       let merged =
         list.filter(both, fn(column) { column.name != name })
-        |> list.append([ScopeColumn(name, column_kind, name)])
+        |> append([ScopeColumn(name, column_kind, name)])
       #(
         #(
           "("
@@ -395,23 +393,21 @@ fn join_item(
 
 /// The column names on both sides of a join that have one kind on both.
 fn common_columns(left: Scope, right: Scope) -> List(#(String, Kind)) {
-  let both = list.append(left, right)
-  list.map(left, fn(column) { column.name })
-  |> list.unique
-  |> list.filter(fn(name) {
-    list.any(right, fn(column) { column.name == name })
-  })
-  |> list.filter_map(fn(name) {
+  let both = append(left, right)
+  map(left, fn(column) { column.name })
+  |> unique
+  |> list.filter(fn(name) { any(right, fn(column) { column.name == name }) })
+  |> filter_map(fn(name) {
     let kinds =
       list.filter(both, fn(column) { column.name == name })
-      |> list.map(fn(column) { column.kind })
-      |> list.unique
+      |> map(fn(column) { column.kind })
+      |> unique
     case kinds {
       [kind] -> Ok(#(name, kind))
       _ -> Error(Nil)
     }
   })
-  |> list.sort(fn(left, right) { string.compare(left.0, right.0) })
+  |> sort(fn(left, right) { compare(left.0, right.0) })
 }
 
 // --- Conditions and expressions --------------------------------------------
@@ -424,9 +420,9 @@ fn condition(
   let #(prefer, generator) = chance(generator, 0.8)
   let pairs = case prefer_join, prefer {
     Some(#(left, right)), True ->
-      list.flat_map(left, fn(left) {
+      flat_map(left, fn(left) {
         list.filter(right, fn(right) { right.kind == left.kind })
-        |> list.map(fn(right) { left.reference <> " = " <> right.reference })
+        |> map(fn(right) { left.reference <> " = " <> right.reference })
       })
     _, _ -> []
   }
@@ -498,7 +494,7 @@ fn expression(
   case kind {
     Bare -> #(#(reference, column.kind), generator)
     Cast -> #(
-      #(reference <> "::" <> schema.kind_sql(column.kind), column.kind),
+      #(reference <> "::" <> kind_sql(column.kind), column.kind),
       generator,
     )
     Coalesce -> #(
@@ -597,7 +593,7 @@ fn same_kind(
 ) -> #(String, Generator) {
   let others =
     list.filter(scope, fn(other) { other.kind == column.kind })
-    |> list.map(fn(other) { other.reference })
+    |> map(fn(other) { other.reference })
   choose(
     generator,
     [equal_literal(column.kind), ..others],
@@ -622,7 +618,7 @@ fn select(
   }
   let #(#(from_sql, scope), generator) =
     from_item(generator, depth, local_ctes, outer)
-  let visible = list.append(scope, outer)
+  let visible = append(scope, outer)
   let #(count, generator) = between(generator, 1, max_columns)
   let #(group, generator) = chance(generator, 0.15)
   let #(aggregate, generator) = chance(generator, 0.1)
@@ -647,14 +643,14 @@ fn select(
   let #(limited, generator) = chance(generator, 0.1)
   let #(limit, generator) = between(generator, 0, 3)
   let tail = case limited {
-    True -> " limit " <> int.to_string(limit)
+    True -> " limit " <> to_string(limit)
     False -> ""
   }
   let sql =
     with_sql
     <> "select "
     <> distinct
-    <> string.join(items, ", ")
+    <> join(items, ", ")
     <> " from "
     <> from_sql
     <> where
@@ -675,7 +671,7 @@ fn common_table_expressions(
   let #(count, generator) = between(generator, 1, 2)
   let #(#(parts, local_ctes), generator) =
     random.numbers(1, count)
-    |> list.fold(#(#([], ctes), generator), fn(state, _) {
+    |> fold(#(#([], ctes), generator), fn(state, _) {
       let #(#(parts, local_ctes), generator) = state
       let #(#(sql, columns), generator) =
         select(generator, depth - 1, local_ctes, [], 4)
@@ -685,15 +681,12 @@ fn common_table_expressions(
       #(
         #(
           [name <> " as " <> materialized <> "(" <> sql <> ")", ..parts],
-          list.append(local_ctes, [Relation(name, columns)]),
+          append(local_ctes, [Relation(name, columns)]),
         ),
         generator,
       )
     })
-  #(
-    #("with " <> string.join(list.reverse(parts), ", ") <> " ", local_ctes),
-    generator,
-  )
+  #(#("with " <> join(reverse(parts), ", ") <> " ", local_ctes), generator)
 }
 
 fn set_operation(
@@ -704,7 +697,7 @@ fn set_operation(
   ctes: List(Relation),
 ) -> #(#(String, Columns), Generator) {
   let #(#(other, other_columns), generator) =
-    select(generator, depth - 1, ctes, [], list.length(columns))
+    select(generator, depth - 1, ctes, [], length(columns))
   let #(operator, generator) =
     choose(
       generator,
@@ -718,9 +711,7 @@ fn set_operation(
       ],
       "union",
     )
-  let kinds = fn(columns: Columns) {
-    list.map(columns, fn(column) { column.1 })
-  }
+  let kinds = fn(columns: Columns) { map(columns, fn(column) { column.1 }) }
   case kinds(columns) == kinds(other_columns) {
     True -> #(
       #(
@@ -741,11 +732,11 @@ fn set_operation(
 
 fn name_items(expressions: List(#(String, Kind))) -> #(List(String), Columns) {
   let named =
-    list.index_map(expressions, fn(expression, index) {
-      let name = "x" <> int.to_string(index)
+    index_map(expressions, fn(expression, index) {
+      let name = "x" <> to_string(index)
       #(expression.0 <> " as " <> name, #(name, expression.1))
     })
-  #(list.map(named, fn(pair) { pair.0 }), list.map(named, fn(pair) { pair.1 }))
+  #(map(named, fn(pair) { pair.0 }), map(named, fn(pair) { pair.1 }))
 }
 
 fn plain_items(
@@ -757,12 +748,12 @@ fn plain_items(
 ) -> #(#(List(String), Columns, String), Generator) {
   let #(expressions, generator) =
     random.numbers(1, count)
-    |> list.fold(#([], generator), fn(state, _) {
+    |> fold(#([], generator), fn(state, _) {
       let #(expressions, generator) = state
       let #(item, generator) = expression(generator, visible, depth, ctes)
       #([item, ..expressions], generator)
     })
-  let #(items, columns) = name_items(list.reverse(expressions))
+  let #(items, columns) = name_items(reverse(expressions))
   #(#(items, columns, ""), generator)
 }
 
@@ -775,7 +766,7 @@ fn aggregate_items(
 ) -> #(#(List(String), Columns, String), Generator) {
   let #(expressions, generator) =
     random.numbers(1, count)
-    |> list.fold(#([], generator), fn(state, _) {
+    |> fold(#([], generator), fn(state, _) {
       let #(expressions, generator) = state
       let #(column, generator) =
         choose(generator, scope, ScopeColumn("1", IntKind, "1"))
@@ -800,7 +791,7 @@ fn aggregate_items(
         )
       #([item, ..expressions], generator)
     })
-  let #(items, columns) = name_items(list.reverse(expressions))
+  let #(items, columns) = name_items(reverse(expressions))
   #(#(items, columns, ""), generator)
 }
 
@@ -863,19 +854,16 @@ fn grouped_items(
     _, _ -> #([], generator)
   }
   let expressions =
-    list.append(
-      list.map(grouped, fn(column) { #(column.reference, column.kind) }),
-      extra,
-    )
+    append(map(grouped, fn(column) { #(column.reference, column.kind) }), extra)
   let #(aggregates, generator) = grouped_aggregates(generator, grouped, scope)
   let #(candidates, generator) =
-    roll(generator, random.shuffle(_, list.append(expressions, aggregates)))
-  let chosen = case list.take(candidates, count) {
+    roll(generator, random.shuffle(_, append(expressions, aggregates)))
+  let chosen = case take(candidates, count) {
     [] -> [#("count(*)", IntKind)]
     chosen -> chosen
   }
   let #(items, columns) = name_items(chosen)
-  let references = string.join(list.map(expressions, fn(item) { item.0 }), ", ")
+  let references = join(map(expressions, fn(item) { item.0 }), ", ")
   let group_by = case expressions, mode {
     [], _ -> ""
     _, GroupBy -> " group by " <> references
@@ -963,7 +951,7 @@ fn change(
     choose(generator, generator.tables, Relation("t0", [#("id", IntKind)]))
   let #(name, generator) = alias(generator, "t")
   let #(returning, generator) = returning_list(generator, table, name)
-  let inner = int.max(depth - 1, 0)
+  let inner = max(depth - 1, 0)
   case kind {
     Select -> {
       let #(#(sql, _), generator) = select(generator, depth, [], [], 4)
@@ -988,8 +976,8 @@ fn returning_list(
     False -> name
   }
   #(
-    list.map(table.columns, fn(column) { prefix <> "." <> column.0 })
-      |> string.join(", "),
+    map(table.columns, fn(column) { prefix <> "." <> column.0 })
+      |> join(", "),
     generator,
   )
 }
@@ -1014,12 +1002,9 @@ fn insert(
       #(
         #(
           " ("
-            <> string.join(
-            ["id", ..list.map(targets, fn(column) { column.0 })],
-            ", ",
-          )
+            <> join(["id", ..map(targets, fn(column) { column.0 })], ", ")
             <> ") values (1000, "
-            <> string.join(values, ", ")
+            <> join(values, ", ")
             <> ")",
           parameters,
         ),
@@ -1063,13 +1048,13 @@ fn parameter_values(
   targets: Columns,
 ) -> #(#(List(String), List(#(Int, Kind))), Generator) {
   let #(#(values, parameters), generator) =
-    list.fold(targets, #(#([], []), generator), fn(state, target) {
+    fold(targets, #(#([], []), generator), fn(state, target) {
       let #(#(values, parameters), generator) = state
       let #(#(value, parameters), generator) =
         parameter_value(generator, table, target, parameters)
       #(#([value, ..values], parameters), generator)
     })
-  #(#(list.reverse(values), parameters), generator)
+  #(#(reverse(values), parameters), generator)
 }
 
 type ValueKind {
@@ -1092,7 +1077,7 @@ fn parameter_value(
   let kind = target.1
   let same =
     list.filter(parameters, fn(parameter) { parameter.1 == kind })
-    |> list.map(fn(parameter) { parameter.0 })
+    |> map(fn(parameter) { parameter.0 })
   let #(value_kind, generator) =
     weighted(
       generator,
@@ -1105,15 +1090,15 @@ fn parameter_value(
       ],
       NewParameter,
     )
-  let number = list.length(parameters) + 1
-  let new_parameter = "$" <> int.to_string(number)
-  let added = list.append(parameters, [#(number, kind)])
+  let number = length(parameters) + 1
+  let new_parameter = "$" <> to_string(number)
+  let added = append(parameters, [#(number, kind)])
   case value_kind {
     NewParameter -> #(#(new_parameter, added), generator)
     CastParameter -> {
       let sql_type =
-        list.key_find(generator.column_types, table <> "." <> target.0)
-        |> result.unwrap(schema.kind_sql(kind))
+        key_find(generator.column_types, table <> "." <> target.0)
+        |> unwrap(kind_sql(kind))
       #(#(new_parameter <> "::" <> sql_type, added), generator)
     }
     RequiredParameter -> #(
@@ -1122,7 +1107,7 @@ fn parameter_value(
     )
     ReusedParameter -> {
       let #(number, generator) = choose(generator, same, 1)
-      #(#("$" <> int.to_string(number), parameters), generator)
+      #(#("$" <> to_string(number), parameters), generator)
     }
     LiteralValue -> #(#(equal_literal(kind), parameters), generator)
   }
@@ -1148,7 +1133,7 @@ fn on_conflict(
   let #(choice, generator) = between(generator, 0, 3)
   let unique_targets =
     list.filter(generator.conflict_targets, fn(target) { target.0 == table })
-    |> list.map(fn(target) { target.1 })
+    |> map(fn(target) { target.1 })
   let #(conflict_target, generator) =
     choose(generator, ["(id)", "(id)", ..unique_targets], "(id)")
   let prefix = " on conflict " <> conflict_target <> " do update set "
@@ -1174,14 +1159,13 @@ fn from_and_condition(
   depth: Int,
 ) -> #(#(String, String, String), Generator) {
   let #(#(from_sql, scope), generator) = from_item(generator, depth, [], [])
-  let extra = case list.take(scope, 2) {
+  let extra = case take(scope, 2) {
     [] -> "1"
-    columns ->
-      string.join(list.map(columns, fn(column) { column.reference }), ", ")
+    columns -> join(map(columns, fn(column) { column.reference }), ", ")
   }
   let target = scope_of(name, table.columns)
   let #(on, generator) =
-    condition(generator, list.append(target, scope), Some(#(target, scope)))
+    condition(generator, append(target, scope), Some(#(target, scope)))
   #(#(from_sql, on, extra), generator)
 }
 
@@ -1201,14 +1185,12 @@ fn update(
       let #(#(values, parameters), generator) =
         parameter_values(generator, table.name, targets)
       let set =
-        list.map2(targets, values, fn(target, value) {
-          target.0 <> " = " <> value
-        })
-        |> string.join(", ")
+        map2(targets, values, fn(target, value) { target.0 <> " = " <> value })
+        |> join(", ")
       let #(reuse, generator) = chance(generator, 0.2)
       let filter = case reuse, parameters {
         True, [#(number, _), ..] ->
-          " and $" <> int.to_string(number) <> " is not null"
+          " and $" <> to_string(number) <> " is not null"
         _, _ -> ""
       }
       #(#(set, filter), generator)
@@ -1294,18 +1276,18 @@ fn merge(
     )
   let #(not_matched, generator) = chance(generator, 0.5)
   let actions =
-    list.flatten([
+    flatten([
       when(matched, matched_action),
       when(by_source, "when not matched by source then " <> by_source_action),
     ])
   let actions = case not_matched || actions == [] {
-    True -> list.append(actions, ["when not matched then do nothing"])
+    True -> append(actions, ["when not matched then do nothing"])
     False -> actions
   }
   let extra =
-    list.take(columns, 2)
-    |> list.map(fn(column) { source_name <> "." <> column.0 })
-    |> string.join(", ")
+    take(columns, 2)
+    |> map(fn(column) { source_name <> "." <> column.0 })
+    |> join(", ")
   #(
     "merge into "
       <> table.name
@@ -1318,7 +1300,7 @@ fn merge(
       <> " on "
       <> on
       <> " "
-      <> string.join(actions, " ")
+      <> join(actions, " ")
       <> " returning "
       <> returning
       <> ", "

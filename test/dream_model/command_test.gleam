@@ -2,22 +2,28 @@
 //// projects that each test writes under build/command_tests.
 
 import dream_model
-import dream_model/command.{Check, Config, Generate, Outcome}
-import dream_model/generator/fingerprint
-import dream_model/nullability
-import dream_model/postgres/wire
+import dream_model/command.{
+  Check, Config, Generate, Outcome, check_closed, check_removed, find_folders,
+  module_of_folder, parse_arguments, read_config, run,
+}
+import dream_model/generator/fingerprint.{compute}
+import dream_model/nullability.{DatabaseFailed, close, connect, execute}
+import dream_model/postgres/wire.{SocketFailed}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/model_database
-import fixtures/servers
-import gleam/erlang/process
-import gleam/int
-import gleam/list
+import fixtures/servers.{default_database}
+import gleam/erlang/process.{new_subject, receive, send}
+import gleam/int.{to_string}
+import gleam/list.{append, drop, each, index_map, reverse}
 import gleam/option.{None, Some}
-import gleam/result
-import gleam/string
-import simplifile
+import gleam/result.{is_error, is_ok}
+import gleam/string.{contains, inspect, join, length, split, starts_with}
+import simplifile.{
+  Eacces, Enoent, create_directory_all, delete, is_file, read,
+  set_permissions_octal, write,
+}
 
 const root = "build/command_tests"
 
@@ -52,20 +58,20 @@ fn make_project(
   files: List(#(String, String)),
 ) -> String {
   let directory = root <> "/" <> scope <> "/" <> name
-  let _ = simplifile.delete(directory)
-  let assert Ok(Nil) = simplifile.create_directory_all(directory)
-  let assert Ok(Nil) = simplifile.write(directory <> "/gleam.toml", toml)
-  list.each(files, fn(file) {
+  let _ = delete(directory)
+  let assert Ok(Nil) = create_directory_all(directory)
+  let assert Ok(Nil) = write(directory <> "/gleam.toml", toml)
+  each(files, fn(file) {
     let path = directory <> "/" <> file.0
     let assert Ok(Nil) =
-      simplifile.create_directory_all(
-        string.split(path, "/")
-        |> list.reverse
-        |> list.drop(1)
-        |> list.reverse
-        |> string.join("/"),
+      create_directory_all(
+        split(path, "/")
+        |> reverse
+        |> drop(1)
+        |> reverse
+        |> join("/"),
       )
-    let assert Ok(Nil) = simplifile.write(path, file.1)
+    let assert Ok(Nil) = write(path, file.1)
   })
   directory
 }
@@ -91,7 +97,7 @@ fn arguments_tests() {
   group("parse_arguments", [
     it("generates with no arguments", fn() {
       // Act
-      let mode = command.parse_arguments([])
+      let mode = parse_arguments([])
 
       // Assert
       mode
@@ -101,7 +107,7 @@ fn arguments_tests() {
     }),
     it("checks with --check", fn() {
       // Act
-      let mode = command.parse_arguments(["--check"])
+      let mode = parse_arguments(["--check"])
 
       // Assert
       mode
@@ -111,7 +117,7 @@ fn arguments_tests() {
     }),
     it("refuses other arguments", fn() {
       // Act
-      let mode = command.parse_arguments(["--write", "now"])
+      let mode = parse_arguments(["--write", "now"])
 
       // Assert
       mode
@@ -176,27 +182,27 @@ fn config_tests() {
   ]
   group(
     "read_config",
-    list.index_map(cases, fn(example, index) {
+    index_map(cases, fn(example, index) {
       let #(title, toml, expected) = example
       it(title, fn() {
         // Arrange
         let directory =
-          make_project("unit", "config_" <> string.inspect(index), toml, [])
+          make_project("unit", "config_" <> inspect(index), toml, [])
 
         // Act
-        let config = command.read_config(directory)
+        let config = read_config(directory)
 
         // Assert
         config
         |> should
         |> be_equal(expected)
-        |> or_fail_with("Expected " <> string.inspect(expected))
+        |> or_fail_with("Expected " <> inspect(expected))
       })
     })
-      |> list.append([
+      |> append([
         it("refuses a folder without gleam.toml", fn() {
           // Act
-          let config = command.read_config(root <> "/no_such_project")
+          let config = read_config(root <> "/no_such_project")
 
           // Assert
           config
@@ -223,8 +229,7 @@ fn folder_tests() {
         ])
 
       // Act
-      let folders =
-        command.find_folders(directory, Config("DATABASE_URL", None))
+      let folders = find_folders(directory, Config("DATABASE_URL", None))
 
       // Assert
       folders
@@ -241,8 +246,7 @@ fn folder_tests() {
         ])
 
       // Act
-      let folders =
-        command.find_folders(directory, Config("DATABASE_URL", None))
+      let folders = find_folders(directory, Config("DATABASE_URL", None))
 
       // Assert
       folders
@@ -262,7 +266,7 @@ fn folder_tests() {
 
       // Act
       let folders =
-        command.find_folders(
+        find_folders(
           directory,
           Config("DATABASE_URL", Some(["src/app/models/user"])),
         )
@@ -282,7 +286,7 @@ fn folder_tests() {
 
       // Act
       let folders =
-        command.find_folders(
+        find_folders(
           directory,
           Config("DATABASE_URL", Some(["src/app/models/post"])),
         )
@@ -300,8 +304,7 @@ fn folder_tests() {
       let directory = make_project("unit", "folders_no_src", plain_toml, [])
 
       // Act
-      let folders =
-        command.find_folders(directory, Config("DATABASE_URL", None))
+      let folders = find_folders(directory, Config("DATABASE_URL", None))
 
       // Assert
       folders
@@ -313,7 +316,7 @@ fn folder_tests() {
     }),
     it("module_of_folder refuses a folder outside src", fn() {
       // Act
-      let module = command.module_of_folder("lib/app/models/user")
+      let module = module_of_folder("lib/app/models/user")
 
       // Assert
       module
@@ -325,7 +328,7 @@ fn folder_tests() {
 }
 
 fn run_failure_tests(version: Int) {
-  let scope = int.to_string(version)
+  let scope = to_string(version)
   let url = model_database.url(version)
   let user_files = [#("src/app/models/user/count.sql", count_sql)]
   let cases = [
@@ -430,7 +433,7 @@ fn run_failure_tests(version: Int) {
           scope,
           "run_no_build",
           plain_toml,
-          list.append(user_files, [#("build/dream_model", "")]),
+          append(user_files, [#("build/dream_model", "")]),
         )
       },
       environment(url),
@@ -447,7 +450,7 @@ fn run_failure_tests(version: Int) {
           scope,
           "run_no_write",
           plain_toml,
-          list.append(user_files, [#("src/app/models/user.gleam/x", "")]),
+          append(user_files, [#("src/app/models/user.gleam/x", "")]),
         )
       },
       environment(url),
@@ -477,8 +480,7 @@ fn run_failure_tests(version: Int) {
         let directory = make()
 
         // Act
-        let outcome =
-          command.run(arguments, directory, read_environment_variable)
+        let outcome = run(arguments, directory, read_environment_variable)
 
         // Assert
         outcome
@@ -487,23 +489,19 @@ fn run_failure_tests(version: Int) {
         |> or_fail_with(expected.output)
       })
     })
-      |> list.append([
+      |> append([
         it("stops on a server version older than 16", fn() {
           // Arrange
           let directory = make_project(scope, "run_old", plain_toml, user_files)
 
           // Act
           let outcome =
-            command.run(
-              [],
-              directory,
-              environment(servers.url(15, servers.default_database)),
-            )
+            run([], directory, environment(servers.url(15, default_database)))
 
           // Assert
           #(
             outcome.status,
-            string.starts_with(
+            starts_with(
               outcome.output,
               "dream_model cannot use the database: PostgreSQL 15",
             ),
@@ -517,7 +515,7 @@ fn run_failure_tests(version: Int) {
 }
 
 fn run_tests(version: Int) {
-  let scope = int.to_string(version)
+  let scope = to_string(version)
   let url = model_database.url(version)
   group("run", [
     it("writes a module and says so", fn() {
@@ -528,7 +526,7 @@ fn run_tests(version: Int) {
         ])
 
       // Act
-      let outcome = command.run([], directory, environment(url))
+      let outcome = run([], directory, environment(url))
 
       // Assert
       outcome
@@ -542,16 +540,15 @@ fn run_tests(version: Int) {
         make_project(scope, "run_formatted", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
         ])
-      let _ = command.run([], directory, environment(url))
-      let assert Ok(written) =
-        simplifile.read(directory <> "/src/app/models/user.gleam")
+      let _ = run([], directory, environment(url))
+      let assert Ok(written) = read(directory <> "/src/app/models/user.gleam")
 
       // Act
       let assert Ok(#(status, output)) =
         run_program("gleam", ["format", "--check", "src"], directory, [])
 
       // Assert
-      #(status, output, string.length(written) > 0)
+      #(status, output, length(written) > 0)
       |> should
       |> be_equal(#(0, "", True))
       |> or_fail_with("Expected gleam format --check to pass")
@@ -562,10 +559,10 @@ fn run_tests(version: Int) {
         make_project(scope, "run_unchanged", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
         ])
-      let _ = command.run([], directory, environment(url))
+      let _ = run([], directory, environment(url))
 
       // Act
-      let outcome = command.run([], directory, environment(url))
+      let outcome = run([], directory, environment(url))
 
       // Assert
       outcome
@@ -579,10 +576,10 @@ fn run_tests(version: Int) {
         make_project(scope, "check_match", plain_toml, [
           #("src/app/models/user/count.sql", count_sql),
         ])
-      let _ = command.run([], directory, environment(url))
+      let _ = run([], directory, environment(url))
 
       // Act
-      let outcome = command.run(["--check"], directory, environment(url))
+      let outcome = run(["--check"], directory, environment(url))
 
       // Assert
       outcome
@@ -602,7 +599,7 @@ fn run_tests(version: Int) {
         ])
 
       // Act
-      let outcome = command.run(["--check"], directory, environment(url))
+      let outcome = run(["--check"], directory, environment(url))
 
       // Assert
       outcome
@@ -623,13 +620,13 @@ fn run_tests(version: Int) {
         ])
 
       // Act
-      let outcome = command.run([], directory, environment(url))
+      let outcome = run([], directory, environment(url))
 
       // Assert
       #(
         outcome,
-        simplifile.is_file(directory <> "/src/app/models/old.gleam"),
-        simplifile.is_file(directory <> "/src/app/models/keep.gleam"),
+        is_file(directory <> "/src/app/models/old.gleam"),
+        is_file(directory <> "/src/app/models/keep.gleam"),
       )
       |> should
       |> be_equal(#(
@@ -650,7 +647,7 @@ fn run_tests(version: Int) {
         ])
 
       // Act
-      let outcome = command.run([], directory, no_environment)
+      let outcome = run([], directory, no_environment)
 
       // Assert
       outcome
@@ -665,11 +662,11 @@ fn run_tests(version: Int) {
           #("src/app/models/old.gleam", old_module),
         ])
       let folder = directory <> "/src/app/models"
-      let assert Ok(Nil) = simplifile.set_permissions_octal(folder, 0o555)
+      let assert Ok(Nil) = set_permissions_octal(folder, 0o555)
 
       // Act
-      let outcome = command.run([], directory, no_environment)
-      let assert Ok(Nil) = simplifile.set_permissions_octal(folder, 0o755)
+      let outcome = run([], directory, no_environment)
+      let assert Ok(Nil) = set_permissions_octal(folder, 0o755)
 
       // Assert
       outcome
@@ -689,10 +686,10 @@ fn run_tests(version: Int) {
         ])
 
       // Act
-      let outcome = command.run([], directory, environment(url))
+      let outcome = run([], directory, environment(url))
 
       // Assert
-      #(outcome, simplifile.read(directory <> "/src/app/models/user.gleam"))
+      #(outcome, read(directory <> "/src/app/models/user.gleam"))
       |> should
       |> be_equal(#(
         Outcome(
@@ -705,11 +702,10 @@ fn run_tests(version: Int) {
     }),
     it("check_closed says that the connection did not close", fn() {
       // Arrange
-      let closed =
-        Error(nullability.DatabaseFailed(wire.SocketFailed("closed")))
+      let closed = Error(DatabaseFailed(SocketFailed("closed")))
 
       // Act
-      let checked = command.check_closed(closed)
+      let checked = check_closed(closed)
 
       // Assert
       checked
@@ -723,12 +719,12 @@ fn run_tests(version: Int) {
       // Arrange
       let results = [
         Ok(Nil),
-        Error(simplifile.Enoent),
-        Error(simplifile.Eacces),
+        Error(Enoent),
+        Error(Eacces),
       ]
 
       // Act
-      let checked = list.map(results, command.check_removed)
+      let checked = list.map(results, check_removed)
 
       // Assert
       checked
@@ -751,34 +747,33 @@ fn run_tests(version: Int) {
             "-- returns: many\nselect title from post_authors\n",
           ),
         ])
-      let assert Ok(analyzer) = nullability.connect(url)
+      let assert Ok(analyzer) = connect(url)
       let tables = ["public.post_authors", "public.posts", "public.users"]
-      let assert Ok(before) = fingerprint.compute(analyzer, tables)
-      let generated = command.run([], directory, environment(url))
-      let assert Ok(written) =
-        simplifile.read(directory <> "/src/app/models/author.gleam")
+      let assert Ok(before) = compute(analyzer, tables)
+      let generated = run([], directory, environment(url))
+      let assert Ok(written) = read(directory <> "/src/app/models/author.gleam")
 
       // Act
       let assert Ok(_) =
-        nullability.execute(
+        execute(
           analyzer,
           "create or replace view post_authors as select u.id, p.title from users u left join posts p on p.user_id = u.id",
           [],
         )
-      let assert Ok(after) = fingerprint.compute(analyzer, tables)
-      let checked = command.run(["--check"], directory, environment(url))
+      let assert Ok(after) = compute(analyzer, tables)
+      let checked = run(["--check"], directory, environment(url))
       let assert Ok(_) =
-        nullability.execute(
+        execute(
           analyzer,
           "create or replace view post_authors as select u.id, p.title from users u join posts p on p.user_id = u.id",
           [],
         )
-      let _ = nullability.close(analyzer)
+      let _ = close(analyzer)
 
       // Assert
       #(
         generated,
-        string.contains(
+        contains(
           written,
           "tables: [\"public.post_authors\", \"public.posts\", \"public.users\"]",
         ),
@@ -807,13 +802,13 @@ fn run_tests(version: Int) {
         ])
 
       // Act
-      let outcome = command.run(["--check"], directory, environment(url))
+      let outcome = run(["--check"], directory, environment(url))
 
       // Assert
       #(
         outcome,
-        simplifile.read(directory <> "/src/app/models/post.gleam")
-          |> result.is_error,
+        read(directory <> "/src/app/models/post.gleam")
+          |> is_error,
       )
       |> should
       |> be_equal(#(
@@ -859,37 +854,37 @@ fn main_tests() {
   group("main", [
     it("command.main halts with status 1 when the command fails", fn() {
       // Arrange
-      let halted = process.new_subject()
+      let halted = new_subject()
 
       // Act
-      command.main(["--bad"], ".", no_environment, process.send(halted, _))
+      command.main(["--bad"], ".", no_environment, send(halted, _))
 
       // Assert
-      process.receive(halted, 1000)
+      receive(halted, 1000)
       |> should
       |> be_equal(Ok(1))
       |> or_fail_with("Expected a halt with status 1")
     }),
     it("command.main does not halt when the command succeeds", fn() {
       // Arrange
-      let halted = process.new_subject()
+      let halted = new_subject()
       let directory =
         make_project("unit", "main_nothing", plain_toml, [
           #("src/app.gleam", ""),
         ])
 
       // Act
-      command.main([], directory, no_environment, process.send(halted, _))
+      command.main([], directory, no_environment, send(halted, _))
 
       // Assert
-      process.receive(halted, 100)
+      receive(halted, 100)
       |> should
       |> be_equal(Error(Nil))
       |> or_fail_with("Expected no halt")
     }),
     it("read_environment_variable reads a variable of the environment", fn() {
       // Act
-      let found = ffi_read_environment_variable("PATH") |> result.is_ok
+      let found = ffi_read_environment_variable("PATH") |> is_ok
 
       // Assert
       found
@@ -925,7 +920,7 @@ fn main_tests() {
       // Act
       let found =
         ffi_run("gleam", ["--version"], ".")
-        |> result.map(fn(ran) { #(ran.0, string.starts_with(ran.1, "gleam ")) })
+        |> result.map(fn(ran) { #(ran.0, starts_with(ran.1, "gleam ")) })
 
       // Assert
       found

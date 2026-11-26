@@ -12,19 +12,32 @@
 //// The expectations are the proof of concept's output (attack16.txt to
 //// attack19.txt), except where never-NULL computed values change them.
 
-import dream_model/nullability.{type AnalysisError}
+import dream_model/nullability.{
+  type Analysis, type AnalysisError, type Analyzer, HintNamesTableColumn,
+  HintNamesUnknownColumn, HintNotNeeded, HintsRefused, analyze,
+}
 import dream_model/nullability/reason.{
-  type ColumnReason, type Origin, type ParameterReason, Computed, Table,
+  type ColumnReason, type Origin, type ParameterReason, AlsoUsedOutsideStore,
+  BeforeTrigger, CastToDomainWithCheck, CastToNotNullDomain, CheckConstraint,
+  ChildTableAllowsNull, CoalesceWithNonNullLastArgument, ColumnAllowsNull,
+  ColumnIsNotNull, Computed, ComputedValue, CountAggregate, DistinctFrom,
+  DomainCheck, DomainNotNull, ExistsSubquery, GeneratedColumnUsesIt, GroupingSet,
+  MergeNotMatchedBySource, NonNullConstant, NotNullHint, NotNullInEveryBranch,
+  NotNullInSchema, NotNullNotValid, NullTest, NullableHint,
+  OuterJoinOrGroupingSet, ParamsHint, PartitionCheck, PartitionKey,
+  PartitionNotNull, RangeResult, RecursiveCte, RelationKindWithoutNotNull,
+  RelationNotTable, Required, ReturningOldNew, RowLevelSecurity, RuleAddsQueries,
+  StoredIntoNullableColumn, SystemColumn, Table, ViewCheckOption, WholeRow,
 }
 import dream_model/postgres/wire
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
-import dream_test/unit.{describe, group, it}
-import fixtures/attack_database
-import fixtures/harness.{type Outcome, PromiseEnforced, Sound}
-import fixtures/servers
-import gleam/int
-import gleam/list
+import dream_test/unit.{type UnitNode, describe, group, it}
+import fixtures/attack_database.{data_sets_for, database, reset}
+import fixtures/harness.{type Outcome, PromiseEnforced, Sound, check}
+import fixtures/servers.{url}
+import gleam/int.{to_string}
+import gleam/list.{append, filter, flatten, map}
 import gleam/option.{type Option, None, Some}
 
 /// What the analysis must give.
@@ -51,21 +64,21 @@ pub type Attack {
 /// The attack tests on one PostgreSQL version.
 pub fn tests(version: Int) -> TestSuite {
   describe(
-    "attacks on PostgreSQL " <> int.to_string(version),
+    "attacks on PostgreSQL " <> to_string(version),
     attacks(version)
-      |> list.filter(fn(attack) { version >= attack.minimum_version })
-      |> list.map(attack_tests(version, _)),
+      |> filter(fn(attack) { version >= attack.minimum_version })
+      |> map(attack_tests(version, _)),
   )
 }
 
-fn attack_tests(version: Int, attack: Attack) -> unit.UnitNode {
+fn attack_tests(version: Int, attack: Attack) -> UnitNode {
   let analysis_test =
     it("analysis matches the expected decisions", fn() {
       // Arrange
       let analyzer = connect(version)
 
       // Act
-      let analyzed = nullability.analyze(analyzer, attack.sql)
+      let analyzed = analyze(analyzer, attack.sql)
       let _ = nullability.close(analyzer)
 
       // Assert
@@ -80,20 +93,20 @@ fn attack_tests(version: Int, attack: Attack) -> unit.UnitNode {
     it("data never contradicts the analysis", fn() {
       // Arrange
       let analyzer = connect(version)
-      let assert Ok(#(analysis, _)) = nullability.analyze(analyzer, attack.sql)
+      let assert Ok(#(analysis, _)) = analyze(analyzer, attack.sql)
       let _ = nullability.close(analyzer)
-      let connection = servers.connect(version, attack_database.database())
+      let connection = servers.connect(version, database())
 
       // Act
       let outcome =
-        harness.check(
+        check(
           connection,
           analysis,
           attack.name,
           attack.sql,
-          attack_database.data_sets_for(version),
+          data_sets_for(version),
           attack.parameter_sets,
-          attack_database.reset,
+          reset,
         )
       let _ = wire.close(connection)
 
@@ -111,22 +124,21 @@ fn attack_tests(version: Int, attack: Attack) -> unit.UnitNode {
   }
 }
 
-fn connect(version: Int) -> nullability.Analyzer {
-  let assert Ok(analyzer) =
-    nullability.connect(servers.url(version, attack_database.database()))
+fn connect(version: Int) -> Analyzer {
+  let assert Ok(analyzer) = nullability.connect(url(version, database()))
   analyzer
 }
 
 fn summarize(
-  analyzed: Result(#(nullability.Analysis, nullability.Analyzer), AnalysisError),
+  analyzed: Result(#(Analysis, Analyzer), AnalysisError),
 ) -> Expected {
   case analyzed {
     Ok(#(analysis, _)) ->
       Decided(
-        columns: list.map(analysis.columns, fn(column) {
+        columns: map(analysis.columns, fn(column) {
           #(column.name, column.not_null, column.origin, column.reason)
         }),
-        parameters: list.map(analysis.parameters, fn(parameter) {
+        parameters: map(analysis.parameters, fn(parameter) {
           #(parameter.position, parameter.optional, parameter.reason)
         }),
       )
@@ -156,10 +168,10 @@ fn parameter(
 /// it like an outer join.
 pub fn attacks(version: Int) -> List(Attack) {
   let grouping = case version >= 18 {
-    True -> reason.OuterJoinOrGroupingSet
-    False -> reason.GroupingSet
+    True -> OuterJoinOrGroupingSet
+    False -> GroupingSet
   }
-  list.flatten([
+  flatten([
     proof_of_concept_attacks(grouping),
     computed_attacks(grouping),
     length_coercion_attacks(),
@@ -176,8 +188,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select u.email, p.title from users u left join posts p on p.user_id = u.id",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("title", False, Table, reason.OuterJoinOrGroupingSet),
+          column("email", True, Table, NotNullInSchema),
+          column("title", False, Table, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -190,8 +202,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select u.email, p.title from users u right join posts p on p.user_id = u.id",
       expected: Decided(
         columns: [
-          column("email", False, Table, reason.OuterJoinOrGroupingSet),
-          column("title", True, Table, reason.NotNullInSchema),
+          column("email", False, Table, OuterJoinOrGroupingSet),
+          column("title", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -204,8 +216,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select u.email, p.title from users u full join posts p on p.user_id = u.id",
       expected: Decided(
         columns: [
-          column("email", False, Table, reason.OuterJoinOrGroupingSet),
-          column("title", False, Table, reason.OuterJoinOrGroupingSet),
+          column("email", False, Table, OuterJoinOrGroupingSet),
+          column("title", False, Table, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -218,7 +230,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select id from users full join (select user_id as id, title from posts) p using (id)",
       expected: Decided(
         columns: [
-          column("id", False, Computed, reason.ComputedValue("coalesceexpr")),
+          column("id", False, Computed, ComputedValue("coalesceexpr")),
         ],
         parameters: [],
       ),
@@ -231,8 +243,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select id, email from users join (select user_id as id from posts) p using (id)",
       expected: Decided(
         columns: [
-          column("id", True, Table, reason.NotNullInSchema),
-          column("email", True, Table, reason.NotNullInSchema),
+          column("id", True, Table, NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -244,7 +256,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select id from users right join (select user_id as id from posts) p using (id)",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -255,7 +267,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select title from users natural left join (select user_id as id, title from posts) p",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -267,8 +279,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select p.title, t.tag from users u left join (posts p join tags t on t.post_id = p.id) on p.user_id = u.id",
       expected: Decided(
         columns: [
-          column("title", False, Table, reason.OuterJoinOrGroupingSet),
-          column("tag", False, Table, reason.OuterJoinOrGroupingSet),
+          column("title", False, Table, OuterJoinOrGroupingSet),
+          column("tag", False, Table, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -281,8 +293,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select p.title, t.tag from users u join (posts p left join tags t on t.post_id = p.id) on p.user_id = u.id",
       expected: Decided(
         columns: [
-          column("title", True, Table, reason.NotNullInSchema),
-          column("tag", False, Table, reason.OuterJoinOrGroupingSet),
+          column("title", True, Table, NotNullInSchema),
+          column("tag", False, Table, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -295,8 +307,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select x.title, x.tag from users u left join (select p.user_id, p.title, t.tag from posts p join tags t on t.post_id = p.id) x on x.user_id = u.id",
       expected: Decided(
         columns: [
-          column("title", False, Table, reason.OuterJoinOrGroupingSet),
-          column("tag", False, Table, reason.OuterJoinOrGroupingSet),
+          column("title", False, Table, OuterJoinOrGroupingSet),
+          column("tag", False, Table, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -308,7 +320,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select x.title from users u left join lateral (select title from posts p where p.user_id = u.id limit 1) x on true",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -319,7 +331,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select x.title from users u cross join lateral (select title from posts p where p.user_id = u.id) x",
       expected: Decided(
-        columns: [column("title", True, Table, reason.NotNullInSchema)],
+        columns: [column("title", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -330,7 +342,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select x.t from users u left join posts p on p.user_id = u.id cross join lateral (select p.title as t) x",
       expected: Decided(
-        columns: [column("t", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("t", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -341,7 +353,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select x.t from users u left join posts p on p.user_id = u.id cross join lateral (select p.title as t offset 0) x",
       expected: Decided(
-        columns: [column("t", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("t", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -352,7 +364,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select p.title from users u left join posts p on p.user_id = u.id where p.title = 'p1'",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -363,7 +375,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select p.title from users u left join posts p on p.user_id = u.id where p.id is not null",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -374,7 +386,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select j.title from (users u left join posts p on p.user_id = u.id) j",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -385,7 +397,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select j.c from (users u left join (select user_id, title from posts) p(uid, c) on p.uid = u.id) j",
       expected: Decided(
-        columns: [column("c", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("c", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -397,9 +409,9 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select u.email, p.title, t.tag from users u left join posts p on p.user_id = u.id left join tags t on t.post_id = p.id",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("title", False, Table, reason.OuterJoinOrGroupingSet),
-          column("tag", False, Table, reason.OuterJoinOrGroupingSet),
+          column("email", True, Table, NotNullInSchema),
+          column("title", False, Table, OuterJoinOrGroupingSet),
+          column("tag", False, Table, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -411,7 +423,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select t.tag from (posts p left join tags t on t.post_id = p.id) left join users u on u.id = p.user_id",
       expected: Decided(
-        columns: [column("tag", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("tag", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -423,8 +435,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select a.email, b.email as other from users a left join users b on b.id = a.id + 100",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("other", False, Table, reason.OuterJoinOrGroupingSet),
+          column("email", True, Table, NotNullInSchema),
+          column("other", False, Table, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -437,10 +449,10 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select u.* from users u right join posts p on p.user_id = u.id",
       expected: Decided(
         columns: [
-          column("id", False, Table, reason.OuterJoinOrGroupingSet),
-          column("email", False, Table, reason.OuterJoinOrGroupingSet),
-          column("nickname", False, Table, reason.OuterJoinOrGroupingSet),
-          column("created_at", False, Table, reason.OuterJoinOrGroupingSet),
+          column("id", False, Table, OuterJoinOrGroupingSet),
+          column("email", False, Table, OuterJoinOrGroupingSet),
+          column("nickname", False, Table, OuterJoinOrGroupingSet),
+          column("created_at", False, Table, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -453,8 +465,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select distinct on (u.id) u.id, p.title from users u left join posts p on p.user_id = u.id order by u.id, p.id",
       expected: Decided(
         columns: [
-          column("id", True, Table, reason.NotNullInSchema),
-          column("title", False, Table, reason.OuterJoinOrGroupingSet),
+          column("id", True, Table, NotNullInSchema),
+          column("title", False, Table, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -466,7 +478,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select p.title from users u left join posts p on p.user_id = u.id group by p.title",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -477,7 +489,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select u.email from users u where exists (select 1 from posts p left join tags t on t.post_id = p.id where p.user_id = u.id)",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -488,7 +500,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select (select p.title) as t from users u left join posts p on p.user_id = u.id",
       expected: Decided(
-        columns: [column("t", False, Computed, reason.ComputedValue("sublink"))],
+        columns: [column("t", False, Computed, ComputedValue("sublink"))],
         parameters: [],
       ),
       parameter_sets: None,
@@ -499,7 +511,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select u.email from users u left join posts p on p.user_id = u.id where p.id is null",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -510,7 +522,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "with t as (select id, email from users) select email from t",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -521,7 +533,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "with t as (select u.id, p.title from users u left join posts p on p.user_id = u.id) select title from t",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -532,7 +544,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "with t as (select user_id, title from posts) select t.title from users u left join t on t.user_id = u.id",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -543,7 +555,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "with t as materialized (select email from users) select email from t",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -554,7 +566,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "with a as (select id, email from users) select x.email from (with b as (select * from a) select email from b) x",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -566,9 +578,9 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "with ins as (insert into users (id, email) values (50, 'n@x') returning id, email, nickname) select * from ins",
       expected: Decided(
         columns: [
-          column("id", True, Table, reason.NotNullInSchema),
-          column("email", True, Table, reason.NotNullInSchema),
-          column("nickname", False, Table, reason.ColumnAllowsNull),
+          column("id", True, Table, NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
+          column("nickname", False, Table, ColumnAllowsNull),
         ],
         parameters: [],
       ),
@@ -581,8 +593,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "with del as (delete from posts returning title, body) select title, body from del",
       expected: Decided(
         columns: [
-          column("title", True, Table, reason.NotNullInSchema),
-          column("body", False, Table, reason.ColumnAllowsNull),
+          column("title", True, Table, NotNullInSchema),
+          column("body", False, Table, ColumnAllowsNull),
         ],
         parameters: [],
       ),
@@ -594,7 +606,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "with recursive r(n, e) as (select id, email from users union all select n + 1, e from r where n < 3) select e from r",
       expected: Decided(
-        columns: [column("e", False, Computed, reason.RecursiveCte)],
+        columns: [column("e", False, Computed, RecursiveCte)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -605,7 +617,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select s.email from (select email from users limit 0) s",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -616,7 +628,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select s.email from (select email from users offset 1) s",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -627,7 +639,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select s.email from (select email, row_number() over () from users) s",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -638,7 +650,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select (select email from users where id = 99) as e",
       expected: Decided(
-        columns: [column("e", False, Computed, reason.ComputedValue("sublink"))],
+        columns: [column("e", False, Computed, ComputedValue("sublink"))],
         parameters: [],
       ),
       parameter_sets: None,
@@ -649,7 +661,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select v.a from (values (1), (null)) v(a)",
       expected: Decided(
-        columns: [column("a", False, Computed, reason.RangeResult("values"))],
+        columns: [column("a", False, Computed, RangeResult("values"))],
         parameters: [],
       ),
       parameter_sets: None,
@@ -660,7 +672,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email as x from users union all select title from posts",
       expected: Decided(
-        columns: [column("x", True, Table, reason.NotNullInEveryBranch)],
+        columns: [column("x", True, Table, NotNullInEveryBranch)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -671,7 +683,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email as x from users union all select body from posts",
       expected: Decided(
-        columns: [column("x", False, Table, reason.ColumnAllowsNull)],
+        columns: [column("x", False, Table, ColumnAllowsNull)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -682,7 +694,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email as x from users intersect select title from posts",
       expected: Decided(
-        columns: [column("x", True, Table, reason.NotNullInEveryBranch)],
+        columns: [column("x", True, Table, NotNullInEveryBranch)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -693,7 +705,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email as x from users except select body from posts",
       expected: Decided(
-        columns: [column("x", False, Table, reason.ColumnAllowsNull)],
+        columns: [column("x", False, Table, ColumnAllowsNull)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -704,7 +716,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email as x from users union all select p.title from users u left join posts p on p.user_id = u.id",
       expected: Decided(
-        columns: [column("x", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("x", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -717,7 +729,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "(select email as x from users union select title from posts) except select 'z'",
       expected: Decided(
-        columns: [column("x", True, Computed, reason.NotNullInEveryBranch)],
+        columns: [column("x", True, Computed, NotNullInEveryBranch)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -728,7 +740,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select s.x from (select email as x from users union all select title from posts) s",
       expected: Decided(
-        columns: [column("x", True, Table, reason.NotNullInEveryBranch)],
+        columns: [column("x", True, Table, NotNullInEveryBranch)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -739,7 +751,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email as x from users union all select null",
       expected: Decided(
-        columns: [column("x", False, Computed, reason.ComputedValue("const"))],
+        columns: [column("x", False, Computed, ComputedValue("const"))],
         parameters: [],
       ),
       parameter_sets: None,
@@ -752,8 +764,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select email, count(*) from users group by email",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("count", True, Computed, reason.CountAggregate),
+          column("email", True, Table, NotNullInSchema),
+          column("count", True, Computed, CountAggregate),
         ],
         parameters: [],
       ),
@@ -802,7 +814,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select count(*) from users group by ()",
       expected: Decided(
-        columns: [column("count", True, Computed, reason.CountAggregate)],
+        columns: [column("count", True, Computed, CountAggregate)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -824,7 +836,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email from users group by email having count(*) > 0",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -835,7 +847,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select distinct email from users",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -847,8 +859,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select u.id, u.email from users u group by u.id",
       expected: Decided(
         columns: [
-          column("id", True, Table, reason.NotNullInSchema),
-          column("email", True, Table, reason.NotNullInSchema),
+          column("id", True, Table, NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -860,7 +872,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email from v_inner",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -871,7 +883,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select title from v_user_posts",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -882,7 +894,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select title from v_of_view",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -893,7 +905,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select v.title from posts p left join v_inner v on v.id = p.user_id",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -904,7 +916,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select v from v_union",
       expected: Decided(
-        columns: [column("v", True, Table, reason.NotNullInEveryBranch)],
+        columns: [column("v", True, Table, NotNullInEveryBranch)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -916,7 +928,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select low from v_computed",
       expected: Decided(
         columns: [
-          column("low", False, Computed, reason.ComputedValue("funcexpr")),
+          column("low", False, Computed, ComputedValue("funcexpr")),
         ],
         parameters: [],
       ),
@@ -928,7 +940,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email from v_secure",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -940,7 +952,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select email from mv_users",
       expected: Decided(
         columns: [
-          column("email", False, Table, reason.RelationKindWithoutNotNull("m")),
+          column("email", False, Table, RelationKindWithoutNotNull("m")),
         ],
         parameters: [],
       ),
@@ -952,7 +964,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select name from animals",
       expected: Decided(
-        columns: [column("name", True, Table, reason.NotNullInSchema)],
+        columns: [column("name", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -963,7 +975,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select name from only animals",
       expected: Decided(
-        columns: [column("name", True, Table, reason.NotNullInSchema)],
+        columns: [column("name", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -975,8 +987,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select kind, payload from events",
       expected: Decided(
         columns: [
-          column("kind", True, Table, reason.NotNullInSchema),
-          column("payload", False, Table, reason.ColumnAllowsNull),
+          column("kind", True, Table, NotNullInSchema),
+          column("payload", False, Table, ColumnAllowsNull),
         ],
         parameters: [],
       ),
@@ -988,7 +1000,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select payload from events_b",
       expected: Decided(
-        columns: [column("payload", True, Table, reason.NotNullInSchema)],
+        columns: [column("payload", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -999,7 +1011,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email from contacts",
       expected: Decided(
-        columns: [column("email", False, Table, reason.ColumnAllowsNull)],
+        columns: [column("email", False, Table, ColumnAllowsNull)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1010,7 +1022,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select b from generated_t",
       expected: Decided(
-        columns: [column("b", True, Table, reason.NotNullInSchema)],
+        columns: [column("b", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1021,7 +1033,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 18,
       sql: "select label from things",
       expected: Decided(
-        columns: [column("label", False, Table, reason.ChildTableAllowsNull)],
+        columns: [column("label", False, Table, ChildTableAllowsNull)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1032,7 +1044,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 18,
       sql: "select code from legacy",
       expected: Decided(
-        columns: [column("code", False, Table, reason.NotNullNotValid)],
+        columns: [column("code", False, Table, NotNullNotValid)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1043,7 +1055,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 18,
       sql: "select b from virt",
       expected: Decided(
-        columns: [column("b", True, Table, reason.NotNullInSchema)],
+        columns: [column("b", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1055,9 +1067,9 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "insert into users (id, email) values (60, 'r@x') returning id, email, nickname",
       expected: Decided(
         columns: [
-          column("id", True, Table, reason.NotNullInSchema),
-          column("email", True, Table, reason.NotNullInSchema),
-          column("nickname", False, Table, reason.ColumnAllowsNull),
+          column("id", True, Table, NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
+          column("nickname", False, Table, ColumnAllowsNull),
         ],
         parameters: [],
       ),
@@ -1069,7 +1081,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into users (id, email) values (1, 'r@x') on conflict do nothing returning email",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1081,8 +1093,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "insert into users (id, email) values (1, 'r@x') on conflict (id) do update set nickname = null returning email, nickname",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("nickname", False, Table, reason.ColumnAllowsNull),
+          column("email", True, Table, NotNullInSchema),
+          column("nickname", False, Table, ColumnAllowsNull),
         ],
         parameters: [],
       ),
@@ -1095,8 +1107,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "insert into posts (id, user_id, title, body) select 100 + u.id, u.id, 'x', p.body from users u left join posts p on p.user_id = u.id returning title, body",
       expected: Decided(
         columns: [
-          column("title", True, Table, reason.NotNullInSchema),
-          column("body", False, Table, reason.ColumnAllowsNull),
+          column("title", True, Table, NotNullInSchema),
+          column("body", False, Table, ColumnAllowsNull),
         ],
         parameters: [],
       ),
@@ -1109,8 +1121,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "update users u set nickname = 'z' from posts p where p.user_id = u.id returning u.email, p.title",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("title", True, Table, reason.NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
+          column("title", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -1122,7 +1134,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "update users u set nickname = 'z' from users u2 left join posts p on p.user_id = u2.id where u2.id = u.id returning p.title",
       expected: Decided(
-        columns: [column("title", False, Table, reason.OuterJoinOrGroupingSet)],
+        columns: [column("title", False, Table, OuterJoinOrGroupingSet)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1134,8 +1146,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "delete from posts p using users u where u.id = p.user_id returning p.title, u.email",
       expected: Decided(
         columns: [
-          column("title", True, Table, reason.NotNullInSchema),
-          column("email", True, Table, reason.NotNullInSchema),
+          column("title", True, Table, NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -1148,8 +1160,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "insert into v_updatable (id, email) values (70, 'v@x') returning email, nickname",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("nickname", False, Table, reason.ColumnAllowsNull),
+          column("email", True, Table, NotNullInSchema),
+          column("nickname", False, Table, ColumnAllowsNull),
         ],
         parameters: [],
       ),
@@ -1162,8 +1174,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "insert into users (id, email) values (61, 'o@x') returning old.email, new.email",
       expected: Decided(
         columns: [
-          column("email", False, Table, reason.ReturningOldNew),
-          column("email", True, Table, reason.NotNullInSchema),
+          column("email", False, Table, ReturningOldNew),
+          column("email", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -1176,8 +1188,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "delete from users where id = 1 returning new.email, old.email",
       expected: Decided(
         columns: [
-          column("email", False, Table, reason.ReturningOldNew),
-          column("email", True, Table, reason.NotNullInSchema),
+          column("email", False, Table, ReturningOldNew),
+          column("email", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -1190,8 +1202,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "update users set nickname = 'q' returning old.email, new.email",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("email", True, Table, reason.NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -1204,8 +1216,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "insert into users (id, email) values (1, 'u@x'), (80, 'w@x') on conflict (id) do update set nickname = 'k' returning old.email, new.email",
       expected: Decided(
         columns: [
-          column("email", False, Table, reason.ReturningOldNew),
-          column("email", False, Table, reason.ReturningOldNew),
+          column("email", False, Table, ReturningOldNew),
+          column("email", False, Table, ReturningOldNew),
         ],
         parameters: [],
       ),
@@ -1218,8 +1230,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "merge into users u using posts p on p.user_id = u.id when matched then update set nickname = 'm' when not matched then insert (id, email) values (p.id + 500, 'm@x') returning u.email, p.title",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("title", True, Table, reason.NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
+          column("title", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -1232,8 +1244,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "merge into users u using posts p on p.user_id = u.id when not matched by source then delete when matched then do nothing returning u.email, p.title",
       expected: Decided(
         columns: [
-          column("email", True, Table, reason.NotNullInSchema),
-          column("title", False, Table, reason.MergeNotMatchedBySource),
+          column("email", True, Table, NotNullInSchema),
+          column("title", False, Table, MergeNotMatchedBySource),
         ],
         parameters: [],
       ),
@@ -1250,9 +1262,9 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
             "merge_action",
             False,
             Computed,
-            reason.ComputedValue("mergesupportfunc"),
+            ComputedValue("mergesupportfunc"),
           ),
-          column("email", True, Table, reason.NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -1265,12 +1277,12 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select * from \"Weird Table\"",
       expected: Decided(
         columns: [
-          column("Weird Name", True, Table, reason.NotNullInSchema),
-          column("with\"quote", True, Table, reason.NotNullInSchema),
-          column("a(b)", True, Table, reason.NotNullInSchema),
-          column("x:y{z}", True, Table, reason.NotNullInSchema),
-          column("ñame", False, Table, reason.ColumnAllowsNull),
-          column("select", True, Table, reason.NotNullInSchema),
+          column("Weird Name", True, Table, NotNullInSchema),
+          column("with\"quote", True, Table, NotNullInSchema),
+          column("a(b)", True, Table, NotNullInSchema),
+          column("x:y{z}", True, Table, NotNullInSchema),
+          column("ñame", False, Table, ColumnAllowsNull),
+          column("select", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -1282,7 +1294,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select u from users u",
       expected: Decided(
-        columns: [column("u", False, Computed, reason.WholeRow)],
+        columns: [column("u", False, Computed, WholeRow)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1294,8 +1306,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select ctid, xmin from users",
       expected: Decided(
         columns: [
-          column("ctid", True, Table, reason.SystemColumn),
-          column("xmin", True, Table, reason.SystemColumn),
+          column("ctid", True, Table, SystemColumn),
+          column("xmin", True, Table, SystemColumn),
         ],
         parameters: [],
       ),
@@ -1307,7 +1319,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select g from generate_series(1, 3) g",
       expected: Decided(
-        columns: [column("g", False, Computed, reason.RangeResult("function"))],
+        columns: [column("g", False, Computed, RangeResult("function"))],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1318,7 +1330,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select x from unnest(array[1, null]) x",
       expected: Decided(
-        columns: [column("x", False, Computed, reason.RangeResult("function"))],
+        columns: [column("x", False, Computed, RangeResult("function"))],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1329,7 +1341,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email::varchar as e from users",
       expected: Decided(
-        columns: [column("e", True, Table, reason.NotNullInSchema)],
+        columns: [column("e", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1340,7 +1352,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email collate \"C\" as e from users",
       expected: Decided(
-        columns: [column("e", True, Table, reason.NotNullInSchema)],
+        columns: [column("e", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1352,7 +1364,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "select id::bigint as b from users",
       expected: Decided(
         columns: [
-          column("b", False, Computed, reason.ComputedValue("funcexpr")),
+          column("b", False, Computed, ComputedValue("funcexpr")),
         ],
         parameters: [],
       ),
@@ -1364,7 +1376,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select null::int as x",
       expected: Decided(
-        columns: [column("x", False, Computed, reason.ComputedValue("const"))],
+        columns: [column("x", False, Computed, ComputedValue("const"))],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1375,8 +1387,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select $1::int as x",
       expected: Decided(
-        columns: [column("x", False, Computed, reason.ComputedValue("param"))],
-        parameters: [parameter(1, False, reason.Required)],
+        columns: [column("x", False, Computed, ComputedValue("param"))],
+        parameters: [parameter(1, False, Required)],
       ),
       parameter_sets: None,
       outcome: Sound,
@@ -1387,10 +1399,10 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       sql: "table users",
       expected: Decided(
         columns: [
-          column("id", True, Table, reason.NotNullInSchema),
-          column("email", True, Table, reason.NotNullInSchema),
-          column("nickname", False, Table, reason.ColumnAllowsNull),
-          column("created_at", True, Table, reason.NotNullInSchema),
+          column("id", True, Table, NotNullInSchema),
+          column("email", True, Table, NotNullInSchema),
+          column("nickname", False, Table, ColumnAllowsNull),
+          column("created_at", True, Table, NotNullInSchema),
         ],
         parameters: [],
       ),
@@ -1410,7 +1422,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email from users for update",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1421,7 +1433,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "select email from users order by email limit 1",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
+        columns: [column("email", True, Table, NotNullInSchema)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1432,7 +1444,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 17,
       sql: "select jt.a from json_table('[{\"a\":1},{}]', '$[*]' columns (a int path '$.a')) jt",
       expected: Decided(
-        columns: [column("a", False, Computed, reason.RangeResult("tablefunc"))],
+        columns: [column("a", False, Computed, RangeResult("tablefunc"))],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1445,8 +1457,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "-- not null: n\nselect count(*) as n from users",
       expected: Refused(
-        nullability.HintsRefused([
-          nullability.HintNotNeeded("n", reason.CountAggregate),
+        HintsRefused([
+          HintNotNeeded("n", CountAggregate),
         ]),
       ),
       parameter_sets: None,
@@ -1457,7 +1469,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "-- not null: newest\nselect max(id) as newest from posts",
       expected: Decided(
-        columns: [column("newest", True, Computed, reason.NotNullHint)],
+        columns: [column("newest", True, Computed, NotNullHint)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1470,8 +1482,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "-- not null: email\nselect email from users",
       expected: Refused(
-        nullability.HintsRefused([
-          nullability.HintNamesTableColumn("email", reason.NotNullInSchema),
+        HintsRefused([
+          HintNamesTableColumn("email", NotNullInSchema),
         ]),
       ),
       parameter_sets: None,
@@ -1482,11 +1494,8 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "-- not null: title\nselect p.title from users u left join posts p on p.user_id = u.id",
       expected: Refused(
-        nullability.HintsRefused([
-          nullability.HintNamesTableColumn(
-            "title",
-            reason.OuterJoinOrGroupingSet,
-          ),
+        HintsRefused([
+          HintNamesTableColumn("title", OuterJoinOrGroupingSet),
         ]),
       ),
       parameter_sets: None,
@@ -1496,9 +1505,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       name: "hint on unknown column (must be refused)",
       minimum_version: 16,
       sql: "-- not null: nope\nselect email from users",
-      expected: Refused(
-        nullability.HintsRefused([nullability.HintNamesUnknownColumn("nope")]),
-      ),
+      expected: Refused(HintsRefused([HintNamesUnknownColumn("nope")])),
       parameter_sets: None,
       outcome: Sound,
     ),
@@ -1507,7 +1514,7 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "-- nullable: email\nselect email from users",
       expected: Decided(
-        columns: [column("email", False, Table, reason.NullableHint)],
+        columns: [column("email", False, Table, NullableHint)],
         parameters: [],
       ),
       parameter_sets: None,
@@ -1518,11 +1525,11 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into users (id, email, nickname) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.ColumnIsNotNull),
-          parameter(3, False, reason.BeforeTrigger),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, ColumnIsNotNull),
+          parameter(3, False, BeforeTrigger),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("p@x"), Some("nick")]]),
@@ -1533,11 +1540,11 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into contacts (id, email, note) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.DomainNotNull),
-          parameter(3, True, reason.StoredIntoNullableColumn),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, DomainNotNull),
+          parameter(3, True, StoredIntoNullableColumn),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("p@x"), Some("n")]]),
@@ -1548,11 +1555,11 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into checked (id, code, other) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.CheckConstraint),
-          parameter(3, False, reason.CheckConstraint),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, CheckConstraint),
+          parameter(3, False, CheckConstraint),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("c"), Some("o")]]),
@@ -1563,11 +1570,11 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into users (id, email) values ($1, $2) on conflict (id) do update set nickname = $3 returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.ColumnIsNotNull),
-          parameter(3, False, reason.BeforeTrigger),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, ColumnIsNotNull),
+          parameter(3, False, BeforeTrigger),
         ],
       ),
       parameter_sets: Some([[Some("1"), Some("p@x"), Some("n")]]),
@@ -1578,10 +1585,10 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "update users set nickname = coalesce($2, nickname) where id = $1 returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.Required),
-          parameter(2, False, reason.Required),
+          parameter(1, False, Required),
+          parameter(2, False, Required),
         ],
       ),
       parameter_sets: Some([[Some("1"), Some("n")]]),
@@ -1592,11 +1599,11 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into events (id, kind, payload) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.ColumnIsNotNull),
-          parameter(3, False, reason.PartitionNotNull),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, ColumnIsNotNull),
+          parameter(3, False, PartitionNotNull),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("b"), Some("x")]]),
@@ -1607,11 +1614,11 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into v_updatable (id, email, nickname) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.ColumnIsNotNull),
-          parameter(3, False, reason.BeforeTrigger),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, ColumnIsNotNull),
+          parameter(3, False, BeforeTrigger),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("p@x"), Some("n")]]),
@@ -1622,11 +1629,11 @@ fn proof_of_concept_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into users (id, email, nickname) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.ColumnIsNotNull),
-          parameter(3, False, reason.BeforeTrigger),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, ColumnIsNotNull),
+          parameter(3, False, BeforeTrigger),
         ],
       ),
       parameter_sets: Some([
@@ -1670,12 +1677,12 @@ fn review_attacks() -> List(Attack) {
       sql: "insert into logged (id, note) values ($1, $2) returning id, note",
       expected: Decided(
         columns: [
-          column("id", True, Table, reason.NotNullInSchema),
-          column("note", False, Table, reason.ColumnAllowsNull),
+          column("id", True, Table, NotNullInSchema),
+          column("note", False, Table, ColumnAllowsNull),
         ],
         parameters: [
-          parameter(1, False, reason.RuleAddsQueries(2)),
-          parameter(2, False, reason.RuleAddsQueries(2)),
+          parameter(1, False, RuleAddsQueries(2)),
+          parameter(2, False, RuleAddsQueries(2)),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1686,10 +1693,10 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into notes (id, plain_text) values ($1, $2::strict_text) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.CastToNotNullDomain),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, CastToNotNullDomain),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1700,10 +1707,10 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into notes (id, plain_text) values ($1, $2::text::strict_text) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.CastToNotNullDomain),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, CastToNotNullDomain),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1714,10 +1721,10 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into notes (id, plain_text) values ($1, $2::text::checked_text) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.CastToDomainWithCheck),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, CastToDomainWithCheck),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1728,10 +1735,10 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized (id, label) values ($1, $2::text::short_required) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.CastToNotNullDomain),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, CastToNotNullDomain),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1742,10 +1749,10 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into gen_from (id, a) values ($1, $2) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.GeneratedColumnUsesIt),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, GeneratedColumnUsesIt),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1756,10 +1763,10 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into keyed (id, kind) values ($1, $2) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.PartitionKey),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, PartitionKey),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("a")]]),
@@ -1770,10 +1777,10 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into wco_view (id, note) values ($1, $2) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.ViewCheckOption),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, ViewCheckOption),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1785,11 +1792,11 @@ fn review_attacks() -> List(Attack) {
       sql: "insert into iot_view (id, note) values ($1, $2) returning id",
       expected: Decided(
         columns: [
-          column("id", False, Table, reason.RelationKindWithoutNotNull("v")),
+          column("id", False, Table, RelationKindWithoutNotNull("v")),
         ],
         parameters: [
-          parameter(1, False, reason.RelationNotTable("v")),
-          parameter(2, False, reason.RelationNotTable("v")),
+          parameter(1, False, RelationNotTable("v")),
+          parameter(2, False, RelationNotTable("v")),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1801,11 +1808,11 @@ fn review_attacks() -> List(Attack) {
       sql: "insert into remote_notes (id, note) values ($1, $2) returning id",
       expected: Decided(
         columns: [
-          column("id", False, Table, reason.RelationKindWithoutNotNull("f")),
+          column("id", False, Table, RelationKindWithoutNotNull("f")),
         ],
         parameters: [
-          parameter(1, False, reason.RelationNotTable("f")),
-          parameter(2, False, reason.RelationNotTable("f")),
+          parameter(1, False, RelationNotTable("f")),
+          parameter(2, False, RelationNotTable("f")),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1819,11 +1826,11 @@ fn review_attacks() -> List(Attack) {
       sql: "insert into remote_checked (id, note) values ($1, $2) returning id",
       expected: Decided(
         columns: [
-          column("id", False, Table, reason.RelationKindWithoutNotNull("f")),
+          column("id", False, Table, RelationKindWithoutNotNull("f")),
         ],
         parameters: [
-          parameter(1, False, reason.RelationNotTable("f")),
-          parameter(2, False, reason.RelationNotTable("f")),
+          parameter(1, False, RelationNotTable("f")),
+          parameter(2, False, RelationNotTable("f")),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1834,11 +1841,11 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into fpart (id, kind, note) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.ColumnIsNotNull),
-          parameter(3, False, reason.RelationNotTable("f")),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, ColumnIsNotNull),
+          parameter(3, False, RelationNotTable("f")),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("r"), Some("n")]]),
@@ -1850,7 +1857,7 @@ fn review_attacks() -> List(Attack) {
       sql: "select id from fparent",
       expected: Decided(
         columns: [
-          column("id", False, Table, reason.RelationKindWithoutNotNull("f")),
+          column("id", False, Table, RelationKindWithoutNotNull("f")),
         ],
         parameters: [],
       ),
@@ -1862,8 +1869,8 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "select email from users where id = $1\n-- params: id?\n-- nullable: email",
       expected: Decided(
-        columns: [column("email", True, Table, reason.NotNullInSchema)],
-        parameters: [parameter(1, False, reason.Required)],
+        columns: [column("email", True, Table, NotNullInSchema)],
+        parameters: [parameter(1, False, Required)],
       ),
       parameter_sets: None,
       outcome: Sound,
@@ -1873,10 +1880,10 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into whole_checked (id, note) values ($1, $2) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.CheckConstraint),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, CheckConstraint),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("n")]]),
@@ -1887,9 +1894,9 @@ fn review_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "update free_checked set note = $2 where id = $1 returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
-        parameters: required_ids(reason.Required)
-          |> list.append([parameter(2, False, reason.CheckConstraint)]),
+        columns: [column("id", True, Table, NotNullInSchema)],
+        parameters: required_ids(Required)
+          |> append([parameter(2, False, CheckConstraint)]),
       ),
       parameter_sets: None,
       outcome: Sound,
@@ -1904,18 +1911,18 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized (id, label, code, flags, more_flags, amount, happened, happened_zone, clock, span) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, True, reason.StoredIntoNullableColumn),
-          parameter(3, True, reason.StoredIntoNullableColumn),
-          parameter(4, True, reason.StoredIntoNullableColumn),
-          parameter(5, True, reason.StoredIntoNullableColumn),
-          parameter(6, True, reason.StoredIntoNullableColumn),
-          parameter(7, True, reason.StoredIntoNullableColumn),
-          parameter(8, True, reason.StoredIntoNullableColumn),
-          parameter(9, True, reason.StoredIntoNullableColumn),
-          parameter(10, True, reason.StoredIntoNullableColumn),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, True, StoredIntoNullableColumn),
+          parameter(3, True, StoredIntoNullableColumn),
+          parameter(4, True, StoredIntoNullableColumn),
+          parameter(5, True, StoredIntoNullableColumn),
+          parameter(6, True, StoredIntoNullableColumn),
+          parameter(7, True, StoredIntoNullableColumn),
+          parameter(8, True, StoredIntoNullableColumn),
+          parameter(9, True, StoredIntoNullableColumn),
+          parameter(10, True, StoredIntoNullableColumn),
         ],
       ),
       parameter_sets: Some([
@@ -1939,10 +1946,10 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized (id, label) values ($1, $2::varchar(10)) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, True, reason.StoredIntoNullableColumn),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, True, StoredIntoNullableColumn),
         ],
       ),
       parameter_sets: Some([[Some("301"), Some("abc")]]),
@@ -1953,10 +1960,10 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "update sized set label = $2 where id = $1 returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.Required),
-          parameter(2, True, reason.StoredIntoNullableColumn),
+          parameter(1, False, Required),
+          parameter(2, True, StoredIntoNullableColumn),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("abc")]]),
@@ -1967,10 +1974,10 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized (id) values ($1) on conflict (id) do update set label = $2 returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, True, reason.StoredIntoNullableColumn),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, True, StoredIntoNullableColumn),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("abc")]]),
@@ -1981,10 +1988,10 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized (id, label) values ($1, upper($2)) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.Required),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, Required),
         ],
       ),
       parameter_sets: Some([[Some("302"), Some("abc")]]),
@@ -1995,10 +2002,10 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized_checked (id, label) values ($1, $2) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.CheckConstraint),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, CheckConstraint),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("abc")]]),
@@ -2009,11 +2016,11 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized_domains (id, checked, required) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.DomainCheck),
-          parameter(3, False, reason.DomainNotNull),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, DomainCheck),
+          parameter(3, False, DomainNotNull),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("abc"), Some("def")]]),
@@ -2024,10 +2031,10 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized_triggered (id, label) values ($1, $2) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.BeforeTrigger),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, BeforeTrigger),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("abc")]]),
@@ -2038,10 +2045,10 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized_secured (id, label) values ($1, $2) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.RowLevelSecurity),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, RowLevelSecurity),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("abc")]]),
@@ -2052,11 +2059,11 @@ fn length_coercion_attacks() -> List(Attack) {
       minimum_version: 16,
       sql: "insert into sized_events (id, kind, label) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.ColumnIsNotNull),
-          parameter(3, False, reason.PartitionNotNull),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, ColumnIsNotNull),
+          parameter(3, False, PartitionNotNull),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("b"), Some("abc")]]),
@@ -2070,163 +2077,163 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
     attack(
       "count star",
       "select count(*) as n from users",
-      decided([column("n", True, Computed, reason.CountAggregate)]),
+      decided([column("n", True, Computed, CountAggregate)]),
     ),
     attack(
       "count of a nullable expression",
       "select count(length(nickname)) as n from users",
-      decided([column("n", True, Computed, reason.CountAggregate)]),
+      decided([column("n", True, Computed, CountAggregate)]),
     ),
     attack(
       "count with a filter",
       "select count(*) filter (where nickname is null) as n from users",
-      decided([column("n", True, Computed, reason.CountAggregate)]),
+      decided([column("n", True, Computed, CountAggregate)]),
     ),
     attack(
       "count as a window function",
       "select count(*) over () as n from users",
-      decided([column("n", False, Computed, reason.ComputedValue("windowfunc"))]),
+      decided([column("n", False, Computed, ComputedValue("windowfunc"))]),
     ),
     attack(
       "aggregate named count outside pg_catalog",
       "select public.count(email) as n from users",
-      decided([column("n", False, Computed, reason.ComputedValue("aggref"))]),
+      decided([column("n", False, Computed, ComputedValue("aggref"))]),
     ),
     attack(
       "count in a left-joined subquery",
       "select x.n from users u left join (select user_id, count(*) as n from posts group by user_id) x on x.user_id = u.id",
-      decided([column("n", False, Computed, reason.OuterJoinOrGroupingSet)]),
+      decided([column("n", False, Computed, OuterJoinOrGroupingSet)]),
     ),
     attack(
       "scalar subquery of count",
       "select (select count(*) from posts) as n",
-      decided([column("n", False, Computed, reason.ComputedValue("sublink"))]),
+      decided([column("n", False, Computed, ComputedValue("sublink"))]),
     ),
     attack(
       "constants",
       "select 1 as k, 'x' as s, 'y'::varchar as v, true as b from users",
       decided([
-        column("k", True, Computed, reason.NonNullConstant),
-        column("s", True, Computed, reason.NonNullConstant),
-        column("v", True, Computed, reason.NonNullConstant),
-        column("b", True, Computed, reason.NonNullConstant),
+        column("k", True, Computed, NonNullConstant),
+        column("s", True, Computed, NonNullConstant),
+        column("v", True, Computed, NonNullConstant),
+        column("b", True, Computed, NonNullConstant),
       ]),
     ),
     attack(
       "constant in an inner-joined subquery",
       "select x.k from users u join (select 1 as k) x on true",
-      decided([column("k", True, Computed, reason.NonNullConstant)]),
+      decided([column("k", True, Computed, NonNullConstant)]),
     ),
     attack(
       "constant in a left-joined subquery",
       "select x.k from users u left join (select 1 as k) x on u.nickname = 'zz'",
-      decided([column("k", False, Computed, reason.OuterJoinOrGroupingSet)]),
+      decided([column("k", False, Computed, OuterJoinOrGroupingSet)]),
     ),
     attack(
       "constant in a left-joined CTE",
       "with c as (select 1 as k) select c.k from users u left join c on u.nickname = 'zz'",
-      decided([column("k", False, Computed, reason.OuterJoinOrGroupingSet)]),
+      decided([column("k", False, Computed, OuterJoinOrGroupingSet)]),
     ),
     attack(
       "constant through a join alias",
       "select j.k from (users u left join (select 1 as k) x on u.nickname = 'zz') j",
-      decided([column("k", False, Computed, reason.OuterJoinOrGroupingSet)]),
+      decided([column("k", False, Computed, OuterJoinOrGroupingSet)]),
     ),
     attack(
       "constant in a left join lateral",
       "select x.k from users u left join lateral (select 1 as k where u.nickname = 'zz') x on true",
-      decided([column("k", False, Computed, reason.OuterJoinOrGroupingSet)]),
+      decided([column("k", False, Computed, OuterJoinOrGroupingSet)]),
     ),
     attack(
       "constants in VALUES",
       "select v.a from (values (1), (2)) v(a)",
-      decided([column("a", False, Computed, reason.RangeResult("values"))]),
+      decided([column("a", False, Computed, RangeResult("values"))]),
     ),
     attack(
       "coalesce with a constant last",
       "select coalesce(nickname, 'none') as n from users",
       decided([
-        column("n", True, Computed, reason.CoalesceWithNonNullLastArgument),
+        column("n", True, Computed, CoalesceWithNonNullLastArgument),
       ]),
     ),
     attack(
       "coalesce with a not-null column last",
       "select coalesce(nickname, email) as n from users",
       decided([
-        column("n", True, Computed, reason.CoalesceWithNonNullLastArgument),
+        column("n", True, Computed, CoalesceWithNonNullLastArgument),
       ]),
     ),
     attack(
       "coalesce with a nullable last argument",
       "select coalesce(email, nickname) as n from users",
       decided([
-        column("n", False, Computed, reason.ComputedValue("coalesceexpr")),
+        column("n", False, Computed, ComputedValue("coalesceexpr")),
       ]),
     ),
     attack(
       "coalesce with an outer-joined last argument",
       "select coalesce(p.body, p.title) as n from users u left join posts p on p.user_id = u.id",
       decided([
-        column("n", False, Computed, reason.ComputedValue("coalesceexpr")),
+        column("n", False, Computed, ComputedValue("coalesceexpr")),
       ]),
     ),
     attack(
       "nested coalesce",
       "select coalesce(nickname, coalesce(nickname, 'x')) as n from users",
       decided([
-        column("n", True, Computed, reason.CoalesceWithNonNullLastArgument),
+        column("n", True, Computed, CoalesceWithNonNullLastArgument),
       ]),
     ),
     attack(
       "coalesce with a NULL constant last",
       "select coalesce(nickname, null) as n from users",
       decided([
-        column("n", False, Computed, reason.ComputedValue("coalesceexpr")),
+        column("n", False, Computed, ComputedValue("coalesceexpr")),
       ]),
     ),
     attack(
       "exists",
       "select exists (select 1 from posts p where p.user_id = u.id) as e from users u",
-      decided([column("e", True, Computed, reason.ExistsSubquery)]),
+      decided([column("e", True, Computed, ExistsSubquery)]),
     ),
     attack(
       "not exists",
       "select not exists (select 1 from posts p where p.user_id = u.id) as e from users u",
-      decided([column("e", False, Computed, reason.ComputedValue("boolexpr"))]),
+      decided([column("e", False, Computed, ComputedValue("boolexpr"))]),
     ),
     attack(
       "in subquery",
       "select u.id in (select p.user_id from posts p) as e from users u",
-      decided([column("e", False, Computed, reason.ComputedValue("sublink"))]),
+      decided([column("e", False, Computed, ComputedValue("sublink"))]),
     ),
     attack(
       "is null and is not null",
       "select nickname is null as a, nickname is not null as b from users",
       decided([
-        column("a", True, Computed, reason.NullTest),
-        column("b", True, Computed, reason.NullTest),
+        column("a", True, Computed, NullTest),
+        column("b", True, Computed, NullTest),
       ]),
     ),
     attack(
       "is null on an outer-joined column",
       "select p.body is null as a from users u left join posts p on p.user_id = u.id",
-      decided([column("a", True, Computed, reason.NullTest)]),
+      decided([column("a", True, Computed, NullTest)]),
     ),
     attack(
       "is distinct from",
       "select nickname is distinct from 'x' as d from users",
-      decided([column("d", True, Computed, reason.DistinctFrom)]),
+      decided([column("d", True, Computed, DistinctFrom)]),
     ),
     attack(
       "is not distinct from",
       "select nickname is not distinct from 'x' as d from users",
-      decided([column("d", False, Computed, reason.ComputedValue("boolexpr"))]),
+      decided([column("d", False, Computed, ComputedValue("boolexpr"))]),
     ),
     attack(
       "is distinct from with an operator that returns NULL",
       "select 'happy'::mood is distinct from 'sad'::mood as d",
       decided([
-        column("d", False, Computed, reason.ComputedValue("distinctexpr")),
+        column("d", False, Computed, ComputedValue("distinctexpr")),
       ]),
     ),
     attack(
@@ -2234,7 +2241,7 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
       "select 1 as k, count(*) as n from users group by rollup (1)",
       decided([
         column("k", False, Computed, grouping),
-        column("n", True, Computed, reason.CountAggregate),
+        column("n", True, Computed, CountAggregate),
       ]),
     ),
     attack(
@@ -2254,7 +2261,7 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
       "constant not grouped, with rollup",
       "select 2 as k, email from users group by rollup (email)",
       decided([
-        column("k", True, Computed, reason.NonNullConstant),
+        column("k", True, Computed, NonNullConstant),
         column("email", False, Table, grouping),
       ]),
     ),
@@ -2262,14 +2269,14 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
       "coalesce over a grouped column",
       "select coalesce(nickname, 'x') as n from users group by rollup (nickname)",
       decided([
-        column("n", True, Computed, reason.CoalesceWithNonNullLastArgument),
+        column("n", True, Computed, CoalesceWithNonNullLastArgument),
       ]),
     ),
     attack(
       "coalesce whose last argument is grouped",
       "select coalesce(null::boolean, nickname is null) as n from users group by rollup (nickname is null)",
       decided([
-        column("n", False, Computed, reason.ComputedValue("coalesceexpr")),
+        column("n", False, Computed, ComputedValue("coalesceexpr")),
       ]),
     ),
     attack(
@@ -2280,14 +2287,14 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
     attack(
       "count of a text column resolves to the aggregate outside pg_catalog",
       "select count(nickname) as n from users",
-      decided([column("n", False, Computed, reason.ComputedValue("aggref"))]),
+      decided([column("n", False, Computed, ComputedValue("aggref"))]),
     ),
     attack(
       "coalesce whose last argument equals a grouped constant",
       "select 1 as k, coalesce(null::int, 1) as c from users group by rollup (1)",
       decided([
         column("k", False, Computed, grouping),
-        column("c", False, Computed, reason.ComputedValue("coalesceexpr")),
+        column("c", False, Computed, ComputedValue("coalesceexpr")),
       ]),
     ),
     attack(
@@ -2303,18 +2310,18 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
     attack(
       "union with a nullable first arm",
       "select body as x from posts union all select email from users",
-      decided([column("x", False, Table, reason.ColumnAllowsNull)]),
+      decided([column("x", False, Table, ColumnAllowsNull)]),
     ),
     Attack(
       name: "param into domain columns",
       minimum_version: 16,
       sql: "insert into domain_targets (id, checked, plain) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.DomainCheck),
-          parameter(3, True, reason.StoredIntoNullableColumn),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, DomainCheck),
+          parameter(3, True, StoredIntoNullableColumn),
         ],
       ),
       parameter_sets: None,
@@ -2325,10 +2332,10 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into secured (id, note) values ($1, $2) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.RowLevelSecurity),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, RowLevelSecurity),
         ],
       ),
       parameter_sets: None,
@@ -2339,11 +2346,11 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "insert into measures (id, kind, value) values ($1, $2, $3) returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
+        columns: [column("id", True, Table, NotNullInSchema)],
         parameters: [
-          parameter(1, False, reason.ColumnIsNotNull),
-          parameter(2, False, reason.ColumnIsNotNull),
-          parameter(3, False, reason.PartitionCheck),
+          parameter(1, False, ColumnIsNotNull),
+          parameter(2, False, ColumnIsNotNull),
+          parameter(3, False, PartitionCheck),
         ],
       ),
       parameter_sets: Some([[Some("300"), Some("a"), Some("x")]]),
@@ -2354,8 +2361,8 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "update users set nickname = $1 where nickname = $1 returning id",
       expected: Decided(
-        columns: [column("id", True, Table, reason.NotNullInSchema)],
-        parameters: [parameter(1, False, reason.AlsoUsedOutsideStore)],
+        columns: [column("id", True, Table, NotNullInSchema)],
+        parameters: [parameter(1, False, AlsoUsedOutsideStore)],
       ),
       parameter_sets: None,
       outcome: Sound,
@@ -2365,8 +2372,8 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
       minimum_version: 16,
       sql: "-- params: x?\nselect $1::int as x",
       expected: Decided(
-        columns: [column("x", False, Computed, reason.ComputedValue("param"))],
-        parameters: [parameter(1, True, reason.ParamsHint)],
+        columns: [column("x", False, Computed, ComputedValue("param"))],
+        parameters: [parameter(1, True, ParamsHint)],
       ),
       parameter_sets: None,
       outcome: Sound,
@@ -2374,54 +2381,54 @@ fn computed_attacks(grouping: ColumnReason) -> List(Attack) {
     attack(
       "union of constants",
       "select 1 as k union all select 2",
-      decided([column("k", True, Computed, reason.NotNullInEveryBranch)]),
+      decided([column("k", True, Computed, NotNullInEveryBranch)]),
     ),
     attack(
       "union of a constant and NULL",
       "select 1 as k union all select null",
-      decided([column("k", False, Computed, reason.ComputedValue("const"))]),
+      decided([column("k", False, Computed, ComputedValue("const"))]),
     ),
     attack(
       "union of a constant and a table column",
       "select 'x' as v union all select email from users",
-      decided([column("v", True, Computed, reason.NotNullInEveryBranch)]),
+      decided([column("v", True, Computed, NotNullInEveryBranch)]),
     ),
     attack(
       "hint on a constant (must be refused)",
       "-- not null: k\nselect 1 as k",
       Refused(
-        nullability.HintsRefused([
-          nullability.HintNotNeeded("k", reason.NonNullConstant),
+        HintsRefused([
+          HintNotNeeded("k", NonNullConstant),
         ]),
       ),
     ),
     attack(
       "hint on computed, not proven",
       "-- not null: low\nselect lower(email) as low from users",
-      decided([column("low", True, Computed, reason.NotNullHint)]),
+      decided([column("low", True, Computed, NotNullHint)]),
     ),
     attack(
       "nullable hint on a proven column",
       "-- nullable: n\nselect count(*) as n from users",
-      decided([column("n", False, Computed, reason.NullableHint)]),
+      decided([column("n", False, Computed, NullableHint)]),
     ),
     attack(
       "weird result names",
       "select 1 as \":resno\", 2 as \"<>\", 3 as \"{\", 4 as \")\", 5 as \"a\\b\", 6 as \"x\ny\", 7 as \"(\"",
       decided([
-        column(":resno", True, Computed, reason.NonNullConstant),
-        column("<>", True, Computed, reason.NonNullConstant),
-        column("{", True, Computed, reason.NonNullConstant),
-        column(")", True, Computed, reason.NonNullConstant),
-        column("a\\b", True, Computed, reason.NonNullConstant),
-        column("x\ny", True, Computed, reason.NonNullConstant),
-        column("(", True, Computed, reason.NonNullConstant),
+        column(":resno", True, Computed, NonNullConstant),
+        column("<>", True, Computed, NonNullConstant),
+        column("{", True, Computed, NonNullConstant),
+        column(")", True, Computed, NonNullConstant),
+        column("a\\b", True, Computed, NonNullConstant),
+        column("x\ny", True, Computed, NonNullConstant),
+        column("(", True, Computed, NonNullConstant),
       ]),
     ),
     attack(
       "CTE with a weird name",
       "with \"my {cte}\" as (select email from users) select email from \"my {cte}\"",
-      decided([column("email", True, Table, reason.NotNullInSchema)]),
+      decided([column("email", True, Table, NotNullInSchema)]),
     ),
   ]
 }

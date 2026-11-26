@@ -5,13 +5,13 @@ import dream_errors.{
 }
 import dream_postgres/client.{
   type Connection, type Date, type QueryError, type Returned, type TimeOfDay,
-  type Timestamp, SchemaFingerprint, array, bool, broken_promise, bytea,
-  calendar_date, calendar_date_decoder, calendar_time_of_day,
-  calendar_time_of_day_decoder, execute, finite_date, finite_timestamp, float,
-  infinite_value, int, more_than_one_row, nullable, numeric_as_text,
-  numeric_text, numeric_text_decoder, parameter, promised_elements_not_null,
-  promised_not_null, query, returning, text, timestamp, timestamp_decoder,
-  timestamp_with_time_zone_decoder, to_error, violated_constraint,
+  type Timestamp, SchemaFingerprint, array, broken_promise, bytea, calendar_date,
+  calendar_date_decoder, calendar_time_of_day, calendar_time_of_day_decoder,
+  execute, finite_date, finite_timestamp, infinite_value, more_than_one_row,
+  nullable, numeric_as_text, numeric_text, numeric_text_decoder, parameter,
+  promised_elements_not_null, promised_not_null, query, returning, text,
+  timestamp, timestamp_decoder, timestamp_with_time_zone_decoder, to_error,
+  violated_constraint,
 }
 import gleam/dynamic/decode.{
   type Decoder, at, bit_array, field, list, optional, string, success,
@@ -102,7 +102,7 @@ pub fn get(db: Connection, id: Int) -> Result(Sample, Error(QueryError)) {
   identifier, happened_at, happened_at_zone, day, clock, tags, scores, rating
 from samples where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> numeric_as_text
   |> returning(sample_decoder())
   |> execute(db)
@@ -146,11 +146,11 @@ pub fn insert(
 )
 returning id"
   |> query
-  |> parameter(nullable(int, small))
-  |> parameter(nullable(int, big))
-  |> parameter(nullable(int, object))
-  |> parameter(nullable(float, real_number))
-  |> parameter(nullable(float, double_number))
+  |> parameter(nullable(client.int, small))
+  |> parameter(nullable(client.int, big))
+  |> parameter(nullable(client.int, object))
+  |> parameter(nullable(client.float, real_number))
+  |> parameter(nullable(client.float, double_number))
   |> parameter(nullable(numeric_text, amount))
   |> parameter(nullable(text, label))
   |> parameter(nullable(text, code))
@@ -159,7 +159,7 @@ returning id"
   |> parameter(nullable(text, document))
   |> parameter(nullable(text, binary_document))
   |> parameter(nullable(text, feeling))
-  |> parameter(nullable(bool, flag))
+  |> parameter(nullable(client.bool, flag))
   |> parameter(nullable(bytea, data))
   |> parameter(nullable(bytea, identifier))
   |> parameter(nullable(timestamp, happened_at))
@@ -167,8 +167,8 @@ returning id"
   |> parameter(nullable(calendar_date, day))
   |> parameter(nullable(calendar_time_of_day, clock))
   |> parameter(nullable(array(nullable(text, _), _), tags))
-  |> parameter(nullable(array(nullable(int, _), _), scores))
-  |> parameter(int(rating))
+  |> parameter(nullable(array(nullable(client.int, _), _), scores))
+  |> parameter(client.int(rating))
   |> returning(at([0], decode.int))
   |> execute(db)
   |> one_row("sample.insert", ["samples_label_index"])
@@ -181,7 +181,7 @@ pub fn tags(
 ) -> Result(Option(List(String)), Error(QueryError)) {
   "select tags from samples where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(at(
     [0],
     optional(promised_elements_not_null(

@@ -104,7 +104,7 @@ pub type User {
 pub fn find(db: Connection, id: Int) -> Result(User, Error(QueryError)) {
   "select id, email, nickname from users where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(user_decoder())
   |> execute(db)
   |> one_row("user.find", [])

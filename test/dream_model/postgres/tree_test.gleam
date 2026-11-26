@@ -1,19 +1,27 @@
 //// Tests for `dream_model/postgres/tree`.
 
-import dream_model/postgres/node
-import dream_model/postgres/tree.{
-  NoTreeNotice, QueryFailed, TokenTooLong, UnknownVersion, UnreadableTree,
-  VersionNotTested, VersionTooOld, WrongQueryCount,
+import dream_model/postgres/node.{
+  NotAnInteger, UnexpectedEnd, UnexpectedToken, node_name,
 }
-import dream_model/postgres/wire
+import dream_model/postgres/tree.{
+  type TreeError, NoTreeNotice, QueryFailed, TokenTooLong, UnknownVersion,
+  UnreadableTree, VersionNotTested, VersionTooOld, WrongQueryCount, capture,
+  check_version, error_to_string, tree_options,
+}
+import dream_model/postgres/wire.{
+  type Connection, Config, ServerError, TlsRefused, close, parse_url,
+  simple_query,
+}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import fixtures/fake_server.{ReceiveMessage, ReceiveStartup, Send}
-import fixtures/servers
-import gleam/list
-import gleam/result
-import gleam/string
+import fixtures/fake_server.{
+  ReceiveMessage, ReceiveStartup, Send, authentication_ok, message, ready, start,
+}
+import fixtures/servers.{default_database}
+import gleam/list.{filter}
+import gleam/result.{map, map_error, replace, try}
+import gleam/string.{inspect, repeat}
 
 pub fn tests(version: Int) -> TestSuite {
   describe("dream_model/postgres/tree", [
@@ -23,13 +31,13 @@ pub fn tests(version: Int) -> TestSuite {
   ])
 }
 
-fn version_case(text: String, expected: Result(Int, tree.TreeError)) {
-  it("check_version reads " <> string.inspect(text), fn() {
+fn version_case(text: String, expected: Result(Int, TreeError)) {
+  it("check_version reads " <> inspect(text), fn() {
     // Arrange
     let server_version = text
 
     // Act
-    let checked = tree.check_version(server_version)
+    let checked = check_version(server_version)
 
     // Assert
     checked
@@ -49,11 +57,10 @@ fn check_version_tests() {
   ])
 }
 
-fn tree_connection(version: Int) -> wire.Connection {
-  let assert Ok(config) =
-    wire.parse_url(servers.url(version, servers.default_database))
+fn tree_connection(version: Int) -> Connection {
+  let assert Ok(config) = parse_url(servers.url(version, default_database))
   let assert Ok(connection) =
-    wire.connect(wire.Config(..config, options: tree.tree_options))
+    wire.connect(Config(..config, options: tree_options))
   connection
 }
 
@@ -62,21 +69,21 @@ fn capture_case(
   version: Int,
   setup: String,
   sql: String,
-  expected: Result(String, tree.TreeError),
+  expected: Result(String, TreeError),
 ) {
   it(name, fn() {
     // Arrange
     let connection = tree_connection(version)
-    let _ = wire.simple_query(connection, setup)
+    let _ = simple_query(connection, setup)
 
     // Act
-    let captured = tree.capture(connection, sql)
-    let _ = wire.close(connection)
+    let captured = capture(connection, sql)
+    let _ = close(connection)
 
     // Assert
     captured
-    |> result.map(fn(captured) { node.node_name(captured.query) })
-    |> result.map_error(without_server_fields)
+    |> map(fn(captured) { node_name(captured.query) })
+    |> map_error(without_server_fields)
     |> should
     |> be_equal(expected)
     |> or_fail_with("Expected the capture result")
@@ -85,12 +92,10 @@ fn capture_case(
 
 /// Keeps only the SQLSTATE of a server error, so the test does not depend
 /// on the file and line that PostgreSQL reports.
-fn without_server_fields(error: tree.TreeError) -> tree.TreeError {
+fn without_server_fields(error: TreeError) -> TreeError {
   case error {
-    QueryFailed(wire.ServerError(fields)) ->
-      QueryFailed(
-        wire.ServerError(list.filter(fields, fn(field) { field.0 == "C" })),
-      )
+    QueryFailed(ServerError(fields)) ->
+      QueryFailed(ServerError(filter(fields, fn(field) { field.0 == "C" })))
     other -> other
   }
 }
@@ -116,13 +121,13 @@ fn capture_tests(version: Int) {
       version,
       "select 1",
       "select nope",
-      Error(QueryFailed(wire.ServerError([#("C", "42703")]))),
+      Error(QueryFailed(ServerError([#("C", "42703")]))),
     ),
     capture_case(
       "returns TokenTooLong for a name of 77 bytes or more with escapes",
       version,
       "select 1",
-      "select 1 as \"" <> string.repeat("(", 40) <> "\"",
+      "select 1 as \"" <> repeat("(", 40) <> "\"",
       Error(TokenTooLong),
     ),
     capture_case(
@@ -134,15 +139,15 @@ fn capture_tests(version: Int) {
     ),
     it("returns NoTreeNotice on a connection without the tree options", fn() {
       // Arrange
-      let connection = servers.connect(version, servers.default_database)
+      let connection = servers.connect(version, default_database)
 
       // Act
-      let captured = tree.capture(connection, "select 1")
-      let _ = wire.close(connection)
+      let captured = capture(connection, "select 1")
+      let _ = close(connection)
 
       // Assert
       captured
-      |> result.replace(Nil)
+      |> replace(Nil)
       |> should
       |> be_equal(Error(NoTreeNotice))
       |> or_fail_with("Expected NoTreeNotice")
@@ -150,45 +155,44 @@ fn capture_tests(version: Int) {
     it("returns UnreadableTree for a notice that is not node text", fn() {
       // Arrange
       let notice =
-        fake_server.message("N", <<
+        message("N", <<
           "M":utf8, "rewritten parse tree:":utf8, 0, "D":utf8, "({QUERY":utf8, 0,
           0,
         >>)
       let url =
-        fake_server.start([
+        start([
           ReceiveStartup,
-          Send(fake_server.authentication_ok()),
-          Send(fake_server.ready()),
+          Send(authentication_ok()),
+          Send(ready()),
           ReceiveMessage,
           ReceiveMessage,
           ReceiveMessage,
           Send(notice),
-          Send(fake_server.ready()),
+          Send(ready()),
         ])
-      let assert Ok(connection) =
-        wire.parse_url(url) |> result.try(wire.connect)
+      let assert Ok(connection) = parse_url(url) |> try(wire.connect)
 
       // Act
-      let captured = tree.capture(connection, "select 1")
-      let _ = wire.close(connection)
+      let captured = capture(connection, "select 1")
+      let _ = close(connection)
 
       // Assert
       captured
-      |> result.replace(Nil)
+      |> replace(Nil)
       |> should
-      |> be_equal(Error(UnreadableTree(node.UnexpectedEnd)))
+      |> be_equal(Error(UnreadableTree(UnexpectedEnd)))
       |> or_fail_with("Expected UnreadableTree")
     }),
   ])
 }
 
-fn text_case(error: tree.TreeError, expected: String) {
-  it("describes " <> string.inspect(error), fn() {
+fn text_case(error: TreeError, expected: String) {
+  it("describes " <> inspect(error), fn() {
     // Arrange
     let value = error
 
     // Act
-    let text = tree.error_to_string(value)
+    let text = error_to_string(value)
 
     // Assert
     text
@@ -213,7 +217,7 @@ fn error_to_string_tests() {
       "cannot read the PostgreSQL version from \"devel\"",
     ),
     text_case(
-      QueryFailed(wire.TlsRefused),
+      QueryFailed(TlsRefused),
       "the URL asks for TLS (sslmode), and the PostgreSQL server does not offer it",
     ),
     text_case(
@@ -225,15 +229,15 @@ fn error_to_string_tests() {
       "the query has a name that is too long to read from PostgreSQL's analyzed query (77 bytes or more with its escapes); use a shorter name",
     ),
     text_case(
-      UnreadableTree(node.UnexpectedEnd),
+      UnreadableTree(UnexpectedEnd),
       "cannot read PostgreSQL's analyzed query: the node text ends too early",
     ),
     text_case(
-      UnreadableTree(node.UnexpectedToken(")")),
+      UnreadableTree(UnexpectedToken(")")),
       "cannot read PostgreSQL's analyzed query: unexpected token ) in the node text",
     ),
     text_case(
-      UnreadableTree(node.NotAnInteger("x")),
+      UnreadableTree(NotAnInteger("x")),
       "cannot read PostgreSQL's analyzed query: x in a list of numbers is not a number",
     ),
     text_case(

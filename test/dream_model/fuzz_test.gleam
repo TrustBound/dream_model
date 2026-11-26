@@ -6,8 +6,8 @@ import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
 import fuzz/run.{Settings}
-import gleam/int
-import gleam/list
+import gleam/int.{to_string}
+import gleam/list.{map}
 
 /// The seeds of the normal test run.
 pub const seeds = [101, 202, 303]
@@ -21,9 +21,9 @@ pub const queries = 40
 /// The fuzz tests on one PostgreSQL version.
 pub fn tests(version: Int) -> TestSuite {
   describe(
-    "fuzzer on PostgreSQL " <> int.to_string(version),
-    list.map(seeds, fn(seed) {
-      it("seed " <> int.to_string(seed) <> " finds no wrong decision", fn() {
+    "fuzzer on PostgreSQL " <> to_string(version),
+    map(seeds, fn(seed) {
+      it("seed " <> to_string(seed) <> " finds no wrong decision", fn() {
         // Arrange
         let settings = Settings(version:, seed:, schemas:, queries:)
 
@@ -36,13 +36,13 @@ pub fn tests(version: Int) -> TestSuite {
         |> be_equal([])
         |> or_fail_with(
           "Expected no failures; replay with DREAM_MODEL_TEST_VERSIONS="
-          <> int.to_string(version)
+          <> to_string(version)
           <> " gleam run -m fuzz -- --seed "
-          <> int.to_string(seed)
+          <> to_string(seed)
           <> " --schemas "
-          <> int.to_string(schemas)
+          <> to_string(schemas)
           <> " --queries "
-          <> int.to_string(queries),
+          <> to_string(queries),
         )
       })
     }),

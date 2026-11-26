@@ -14,15 +14,18 @@
 //// Every failure is an `Error` value. A PostgreSQL ErrorResponse keeps all
 //// of its fields.
 
-import dream_model/postgres/scram
-import gleam/bit_array
-import gleam/dict.{type Dict}
+import dream_model/postgres/scram.{
+  type ScramError, client_final_message, client_first_message_bare, create_nonce,
+  gs2_header, md5_password, verify_server_final,
+}
+import gleam/bit_array.{byte_size, from_string}
+import gleam/dict.{type Dict, get, insert, new}
 import gleam/int
-import gleam/list
-import gleam/option.{type Option, None, Some}
-import gleam/result
-import gleam/string
-import gleam/uri
+import gleam/list.{filter, key_find, reverse, unique}
+import gleam/option.{type Option, None, Some, or, to_result}
+import gleam/result.{map_error, replace_error, try}
+import gleam/string.{drop_start, join, split, split_once, to_graphemes}
+import gleam/uri.{parse, parse_query}
 
 /// How the connection uses TLS. It comes from the `sslmode` of the URL.
 pub type TlsMode {
@@ -99,7 +102,7 @@ pub type WireError {
   /// not support. The value is the code of the authentication request.
   UnsupportedAuthentication(method: String)
   /// The SCRAM exchange failed on the client side.
-  ScramFailed(error: scram.ScramError)
+  ScramFailed(error: ScramError)
   /// The server sent something that the protocol does not allow.
   ProtocolViolation(reason: String)
   /// PostgreSQL sent an ErrorResponse. Each field is its one-letter code
@@ -164,21 +167,19 @@ const ssl_request_code = 80_877_103
 /// user name and the password are split off before the rest of the URL is
 /// read, and an `@` after the host is refused.
 pub fn parse_url(url: String) -> Result(Config, WireError) {
-  use #(user_information, without_user) <- result.try(split_user_information(
-    url,
-  ))
-  use parsed <- result.try(
-    uri.parse(without_user)
-    |> result.replace_error(InvalidUrl("it is not a URL")),
+  use #(user_information, without_user) <- try(split_user_information(url))
+  use parsed <- try(
+    parse(without_user)
+    |> replace_error(InvalidUrl("it is not a URL")),
   )
-  use Nil <- result.try(check_scheme(parsed.scheme))
-  use host <- result.try(
-    option.to_result(parsed.host, InvalidUrl("it has no host"))
-    |> result.try(require_text(_, "it has no host")),
+  use Nil <- try(check_scheme(parsed.scheme))
+  use host <- try(
+    to_result(parsed.host, InvalidUrl("it has no host"))
+    |> try(require_text(_, "it has no host")),
   )
-  use #(user, password) <- result.try(parse_user_information(user_information))
-  use database <- result.try(parse_database(parsed.path, user))
-  use tls <- result.try(parse_tls_mode(parsed.query))
+  use #(user, password) <- try(parse_user_information(user_information))
+  use database <- try(parse_database(parsed.path, user))
+  use tls <- try(parse_tls_mode(parsed.query))
   Ok(Config(
     host:,
     port: option.unwrap(parsed.port, 5432),
@@ -192,18 +193,18 @@ pub fn parse_url(url: String) -> Result(Config, WireError) {
 
 /// Opens a connection and logs in.
 pub fn connect(config: Config) -> Result(Connection, WireError) {
-  use socket <- result.try(
+  use socket <- try(
     connect_socket(config.host, config.port, timeout_milliseconds)
-    |> result.map_error(ConnectFailed(config.host, config.port, _)),
+    |> map_error(ConnectFailed(config.host, config.port, _)),
   )
   let started = {
-    use socket <- result.try(negotiate_tls(socket, config))
-    use Nil <- result.try(send_bytes(socket, startup_message(config)))
-    use Nil <- result.try(authenticate(socket, config))
-    use parameters <- result.try(receive_parameters(socket, dict.new()))
+    use socket <- try(negotiate_tls(socket, config))
+    use Nil <- try(send_bytes(socket, startup_message(config)))
+    use Nil <- try(authenticate(socket, config))
+    use parameters <- try(receive_parameters(socket, new()))
     Ok(Connection(socket:, parameters:))
   }
-  result.map_error(started, close_after_failure(socket, _))
+  map_error(started, close_after_failure(socket, _))
 }
 
 /// Returns a run-time parameter that the server reported at startup, for
@@ -212,7 +213,7 @@ pub fn get_parameter(
   connection: Connection,
   name: String,
 ) -> Result(String, Nil) {
-  dict.get(connection.parameters, name)
+  get(connection.parameters, name)
 }
 
 /// Runs SQL with the simple query protocol. The text may hold more than one
@@ -222,7 +223,7 @@ pub fn simple_query(
   connection: Connection,
   sql: String,
 ) -> Result(List(List(Option(String))), WireError) {
-  use response <- result.try(request(connection, message("Q", c_string(sql))))
+  use response <- try(request(connection, message("Q", c_string(sql))))
   Ok(response.rows)
 }
 
@@ -239,7 +240,7 @@ pub fn describe(
       message("D", <<"S":utf8, 0>>),
       message("S", <<>>),
     ])
-  use response <- result.try(request(connection, messages))
+  use response <- try(request(connection, messages))
   Ok(Description(
     parameter_types: response.parameter_types,
     fields: response.fields,
@@ -261,7 +262,7 @@ pub fn execute(
       message("E", <<0, 0:32>>),
       message("S", <<>>),
     ])
-  use response <- result.try(request(connection, messages))
+  use response <- try(request(connection, messages))
   Ok(response.rows)
 }
 
@@ -286,7 +287,7 @@ pub fn get_field(
   fields: List(#(String, String)),
   code: String,
 ) -> Result(String, Nil) {
-  list.key_find(fields, code)
+  key_find(fields, code)
 }
 
 /// Returns a readable message for a connection or server error.
@@ -350,12 +351,12 @@ fn require_text(text: String, reason: String) -> Result(String, WireError) {
 fn split_user_information(
   url: String,
 ) -> Result(#(Option(String), String), WireError) {
-  case string.split_once(url, "://") {
+  case split_once(url, "://") {
     Error(Nil) -> Ok(#(None, url))
     Ok(#(scheme, rest)) -> {
       let #(authority, after_authority) =
-        split_authority(string.to_graphemes(rest), [])
-      use Nil <- result.try(case string.contains(after_authority, "@") {
+        split_authority(to_graphemes(rest), [])
+      use Nil <- try(case string.contains(after_authority, "@") {
         True ->
           Error(InvalidUrl(
             "it has an @ after the host; write @, /, ? and # in the user name and the password as %40, %2F, %3F and %23",
@@ -378,9 +379,9 @@ fn split_authority(
   authority: List(String),
 ) -> #(String, String) {
   case characters {
-    [] -> #(string.concat(list.reverse(authority)), "")
+    [] -> #(string.concat(reverse(authority)), "")
     ["/", ..] | ["?", ..] | ["#", ..] -> #(
-      string.concat(list.reverse(authority)),
+      string.concat(reverse(authority)),
       string.concat(characters),
     )
     [character, ..rest] -> split_authority(rest, [character, ..authority])
@@ -390,9 +391,9 @@ fn split_authority(
 /// Splits the authority at its last `@`: the user name and the password
 /// before it, the host and the port after it.
 fn split_at_last_at(authority: String) -> #(Option(String), String) {
-  case list.reverse(string.split(authority, "@")) {
+  case reverse(split(authority, "@")) {
     [host_and_port, last, ..earlier] -> #(
-      Some(string.join(list.reverse([last, ..earlier]), "@")),
+      Some(join(reverse([last, ..earlier]), "@")),
       host_and_port,
     )
     _ -> #(None, authority)
@@ -403,14 +404,14 @@ fn parse_user_information(
   information: Option(String),
 ) -> Result(#(String, Option(String)), WireError) {
   let no_user = InvalidUrl("it has no user name")
-  use information <- result.try(option.to_result(information, no_user))
-  let #(user, password) = case string.split_once(information, ":") {
+  use information <- try(to_result(information, no_user))
+  let #(user, password) = case split_once(information, ":") {
     Ok(#(user, password)) -> #(user, Some(password))
     Error(Nil) -> #(information, None)
   }
-  use user <- result.try(percent_decode(user))
-  use user <- result.try(require_text(user, "it has no user name"))
-  use password <- result.try(case password {
+  use user <- try(percent_decode(user))
+  use user <- try(require_text(user, "it has no user name"))
+  use password <- try(case password {
     Some(password) -> percent_decode(password) |> result.map(Some)
     None -> Ok(None)
   })
@@ -421,38 +422,38 @@ fn parse_user_information(
 fn parse_database(path: String, user: String) -> Result(String, WireError) {
   case path {
     "" | "/" -> Ok(user)
-    _ -> percent_decode(string.drop_start(path, 1))
+    _ -> percent_decode(drop_start(path, 1))
   }
 }
 
 fn percent_decode(text: String) -> Result(String, WireError) {
   uri.percent_decode(text)
-  |> result.replace_error(InvalidUrl("it has a bad percent escape"))
+  |> replace_error(InvalidUrl("it has a bad percent escape"))
 }
 
 /// The keys that the query string of the URL can hold.
 const query_keys = ["sslmode"]
 
 fn parse_tls_mode(query: Option(String)) -> Result(TlsMode, WireError) {
-  use pairs <- result.try(
-    uri.parse_query(option.unwrap(query, ""))
-    |> result.replace_error(InvalidUrl("its query string cannot be read")),
+  use pairs <- try(
+    parse_query(option.unwrap(query, ""))
+    |> replace_error(InvalidUrl("its query string cannot be read")),
   )
   let unknown =
     list.map(pairs, fn(pair) { pair.0 })
-    |> list.filter(fn(key) { !list.contains(query_keys, key) })
-    |> list.unique
-  use Nil <- result.try(case unknown {
+    |> filter(fn(key) { !list.contains(query_keys, key) })
+    |> unique
+  use Nil <- try(case unknown {
     [] -> Ok(Nil)
     _ ->
       Error(InvalidUrl(
         "its query string has the keys "
-        <> string.join(unknown, ", ")
+        <> join(unknown, ", ")
         <> ", which dream_model does not support; the only supported key is "
-        <> string.join(query_keys, ", "),
+        <> join(query_keys, ", "),
       ))
   })
-  case list.key_find(pairs, "sslmode") {
+  case key_find(pairs, "sslmode") {
     Error(Nil) | Ok("disable") -> Ok(NoTls)
     Ok("require") -> Ok(TlsWithoutVerification)
     Ok("verify-full") -> Ok(TlsWithVerification)
@@ -485,12 +486,12 @@ fn upgrade_to_tls(
   host: String,
   verify_host: Bool,
 ) -> Result(Socket, WireError) {
-  use Nil <- result.try(send_bytes(socket, <<8:32, ssl_request_code:32>>))
-  use answer <- result.try(receive_bytes(socket, 1))
+  use Nil <- try(send_bytes(socket, <<8:32, ssl_request_code:32>>))
+  use answer <- try(receive_bytes(socket, 1))
   case answer {
     <<"S":utf8>> ->
       start_tls(socket, host, verify_host, timeout_milliseconds)
-      |> result.map_error(TlsFailed)
+      |> map_error(TlsFailed)
     <<"N":utf8>> -> Error(TlsRefused)
     _ -> Error(ProtocolViolation("unexpected answer to the TLS request"))
   }
@@ -512,30 +513,30 @@ fn startup_message(config: Config) -> BitArray {
     |> list.map(fn(pair) { <<c_string(pair.0):bits, c_string(pair.1):bits>> })
     |> bit_array.concat
   let body = <<protocol_version:32, parameters:bits, 0>>
-  <<{ bit_array.byte_size(body) + 4 }:32, body:bits>>
+  <<{ byte_size(body) + 4 }:32, body:bits>>
 }
 
 fn authenticate(socket: Socket, config: Config) -> Result(Nil, WireError) {
-  use #(kind, body) <- result.try(receive_message(socket))
+  use #(kind, body) <- try(receive_message(socket))
   case kind, body {
     "R", <<0:32>> -> Ok(Nil)
     "R", <<3:32>> -> {
-      use Nil <- result.try(case config.tls {
+      use Nil <- try(case config.tls {
         NoTls -> Error(CleartextWithoutTls)
         TlsWithoutVerification | TlsWithVerification -> Ok(Nil)
       })
-      use password <- result.try(require_password(config))
-      use Nil <- result.try(send_bytes(socket, message("p", c_string(password))))
+      use password <- try(require_password(config))
+      use Nil <- try(send_bytes(socket, message("p", c_string(password))))
       authenticate(socket, config)
     }
     "R", <<5:32, salt:bytes-size(4)>> -> {
-      use password <- result.try(require_password(config))
-      let answer = scram.md5_password(config.user, password, salt)
-      use Nil <- result.try(send_bytes(socket, message("p", c_string(answer))))
+      use password <- try(require_password(config))
+      let answer = md5_password(config.user, password, salt)
+      use Nil <- try(send_bytes(socket, message("p", c_string(answer))))
       authenticate(socket, config)
     }
     "R", <<10:32, mechanisms:bytes>> -> {
-      use Nil <- result.try(authenticate_with_scram(socket, config, mechanisms))
+      use Nil <- try(authenticate_with_scram(socket, config, mechanisms))
       authenticate(socket, config)
     }
     "R", <<code:32, _:bytes>> ->
@@ -546,7 +547,7 @@ fn authenticate(socket: Socket, config: Config) -> Result(Nil, WireError) {
 }
 
 fn require_password(config: Config) -> Result(String, WireError) {
-  option.to_result(config.password, PasswordMissing)
+  to_result(config.password, PasswordMissing)
 }
 
 fn authenticate_with_scram(
@@ -554,51 +555,49 @@ fn authenticate_with_scram(
   config: Config,
   mechanisms: BitArray,
 ) -> Result(Nil, WireError) {
-  use Nil <- result.try(check_scram_offered(mechanisms))
-  use password <- result.try(require_password(config))
-  let nonce = scram.create_nonce()
-  let client_first_bare = scram.client_first_message_bare(nonce)
-  let client_first =
-    bit_array.from_string(scram.gs2_header <> client_first_bare)
-  use Nil <- result.try(send_bytes(
+  use Nil <- try(check_scram_offered(mechanisms))
+  use password <- try(require_password(config))
+  let nonce = create_nonce()
+  let client_first_bare = client_first_message_bare(nonce)
+  let client_first = from_string(gs2_header <> client_first_bare)
+  use Nil <- try(send_bytes(
     socket,
     message("p", <<
       c_string("SCRAM-SHA-256"):bits,
-      { bit_array.byte_size(client_first) }:32,
+      { byte_size(client_first) }:32,
       client_first:bits,
     >>),
   ))
-  use server_first <- result.try(receive_sasl(socket, 11))
-  use client_final <- result.try(
-    scram.client_final_message(password, client_first_bare, nonce, server_first)
-    |> result.map_error(ScramFailed),
+  use server_first <- try(receive_sasl(socket, 11))
+  use client_final <- try(
+    client_final_message(password, client_first_bare, nonce, server_first)
+    |> map_error(ScramFailed),
   )
-  use Nil <- result.try(send_bytes(
+  use Nil <- try(send_bytes(
     socket,
-    message("p", bit_array.from_string(client_final.message)),
+    message("p", from_string(client_final.message)),
   ))
-  use server_final <- result.try(receive_sasl(socket, 12))
-  scram.verify_server_final(server_final, client_final.server_signature)
-  |> result.map_error(ScramFailed)
+  use server_final <- try(receive_sasl(socket, 12))
+  verify_server_final(server_final, client_final.server_signature)
+  |> map_error(ScramFailed)
 }
 
 fn check_scram_offered(mechanisms: BitArray) -> Result(Nil, WireError) {
   let offered =
     bit_array.to_string(mechanisms)
     |> result.unwrap("")
-    |> string.split("\u{0}")
+    |> split("\u{0}")
   case list.contains(offered, "SCRAM-SHA-256") {
     True -> Ok(Nil)
     False ->
       Error(UnsupportedAuthentication(
-        "SASL "
-        <> string.join(list.filter(offered, fn(name) { name != "" }), ", "),
+        "SASL " <> join(filter(offered, fn(name) { name != "" }), ", "),
       ))
   }
 }
 
 fn receive_sasl(socket: Socket, code: Int) -> Result(String, WireError) {
-  use #(kind, body) <- result.try(receive_message(socket))
+  use #(kind, body) <- try(receive_message(socket))
   case kind, body {
     "R", <<received:32, data:bytes>> if received == code -> decode_text(data)
     "E", _ -> Error(server_error(body))
@@ -610,13 +609,13 @@ fn receive_parameters(
   socket: Socket,
   parameters: Dict(String, String),
 ) -> Result(Dict(String, String), WireError) {
-  use #(kind, body) <- result.try(receive_message(socket))
+  use #(kind, body) <- try(receive_message(socket))
   case kind {
     "Z" -> Ok(parameters)
     "S" -> {
-      use #(name, rest) <- result.try(read_c_string(body))
-      use #(value, _rest) <- result.try(read_c_string(rest))
-      receive_parameters(socket, dict.insert(parameters, name, value))
+      use #(name, rest) <- try(read_c_string(body))
+      use #(value, _rest) <- try(read_c_string(rest))
+      receive_parameters(socket, insert(parameters, name, value))
     }
     "E" -> Error(server_error(body))
     _ -> receive_parameters(socket, parameters)
@@ -645,7 +644,7 @@ fn request(
   messages: BitArray,
 ) -> Result(Response, WireError) {
   let exchanged = {
-    use Nil <- result.try(send_bytes(connection.socket, messages))
+    use Nil <- try(send_bytes(connection.socket, messages))
     collect_response(
       connection.socket,
       Response(
@@ -657,8 +656,8 @@ fn request(
       ),
     )
   }
-  use response <- result.try(
-    result.map_error(exchanged, close_after_failure(connection.socket, _)),
+  use response <- try(
+    map_error(exchanged, close_after_failure(connection.socket, _)),
   )
   case response.error {
     Some(error) -> Error(error)
@@ -666,8 +665,8 @@ fn request(
       Ok(
         Response(
           ..response,
-          rows: list.reverse(response.rows),
-          notices: list.reverse(response.notices),
+          rows: reverse(response.rows),
+          notices: reverse(response.notices),
         ),
       )
   }
@@ -677,11 +676,11 @@ fn collect_response(
   socket: Socket,
   response: Response,
 ) -> Result(Response, WireError) {
-  use #(kind, body) <- result.try(receive_message(socket))
+  use #(kind, body) <- try(receive_message(socket))
   case kind {
     "Z" -> Ok(response)
     _ -> {
-      use response <- result.try(add_message(response, kind, body))
+      use response <- try(add_message(response, kind, body))
       collect_response(socket, response)
     }
   }
@@ -694,26 +693,26 @@ fn add_message(
 ) -> Result(Response, WireError) {
   case kind {
     "D" -> {
-      use row <- result.try(decode_data_row(body))
+      use row <- try(decode_data_row(body))
       Ok(Response(..response, rows: [row, ..response.rows]))
     }
     "T" -> {
-      use fields <- result.try(decode_row_description(body))
+      use fields <- try(decode_row_description(body))
       Ok(Response(..response, fields:))
     }
     "t" -> {
-      use parameter_types <- result.try(decode_parameter_description(body))
+      use parameter_types <- try(decode_parameter_description(body))
       Ok(Response(..response, parameter_types:))
     }
     "N" -> {
-      use fields <- result.try(decode_fields(body, []))
+      use fields <- try(decode_fields(body, []))
       Ok(Response(..response, notices: [Notice(fields), ..response.notices]))
     }
     "E" ->
       Ok(
         Response(
           ..response,
-          error: option.or(response.error, Some(server_error(body))),
+          error: or(response.error, Some(server_error(body))),
         ),
       )
     _ -> Ok(response)
@@ -730,8 +729,8 @@ fn bind_body(parameters: List(Option(String))) -> BitArray {
       case parameter {
         None -> <<-1:32>>
         Some(text) -> {
-          let bytes = bit_array.from_string(text)
-          <<{ bit_array.byte_size(bytes) }:32, bytes:bits>>
+          let bytes = from_string(text)
+          <<{ byte_size(bytes) }:32, bytes:bits>>
         }
       }
     })
@@ -742,7 +741,7 @@ fn bind_body(parameters: List(Option(String))) -> BitArray {
 // --- Messages --------------------------------------------------------------
 
 fn message(kind: String, body: BitArray) -> BitArray {
-  <<kind:utf8, { bit_array.byte_size(body) + 4 }:32, body:bits>>
+  <<kind:utf8, { byte_size(body) + 4 }:32, body:bits>>
 }
 
 fn c_string(text: String) -> BitArray {
@@ -751,19 +750,19 @@ fn c_string(text: String) -> BitArray {
 
 fn send_bytes(socket: Socket, data: BitArray) -> Result(Nil, WireError) {
   send(socket, data)
-  |> result.map_error(SocketFailed)
+  |> map_error(SocketFailed)
 }
 
 fn receive_bytes(socket: Socket, length: Int) -> Result(BitArray, WireError) {
   receive_exactly(socket, length, timeout_milliseconds)
-  |> result.map_error(SocketFailed)
+  |> map_error(SocketFailed)
 }
 
 fn receive_message(socket: Socket) -> Result(#(String, BitArray), WireError) {
-  use header <- result.try(receive_bytes(socket, 5))
+  use header <- try(receive_bytes(socket, 5))
   case header {
     <<kind, length:32>> if length >= 4 -> {
-      use body <- result.try(receive_bytes(socket, length - 4))
+      use body <- try(receive_bytes(socket, length - 4))
       Ok(#(byte_to_string(kind), body))
     }
     _ -> Error(ProtocolViolation("a message length is below 4"))
@@ -785,15 +784,15 @@ fn malformed(name: String) -> WireError {
 
 fn decode_text(bytes: BitArray) -> Result(String, WireError) {
   bit_array.to_string(bytes)
-  |> result.replace_error(ProtocolViolation("a text value is not UTF-8"))
+  |> replace_error(ProtocolViolation("a text value is not UTF-8"))
 }
 
 fn read_c_string(bytes: BitArray) -> Result(#(String, BitArray), WireError) {
-  use #(text, rest) <- result.try(
+  use #(text, rest) <- try(
     split_at_zero(bytes)
-    |> result.replace_error(ProtocolViolation("a string has no terminator")),
+    |> replace_error(ProtocolViolation("a string has no terminator")),
   )
-  use text <- result.try(decode_text(text))
+  use text <- try(decode_text(text))
   Ok(#(text, rest))
 }
 
@@ -803,10 +802,10 @@ fn decode_fields(
 ) -> Result(List(#(String, String)), WireError) {
   case body {
     <<code, rest:bytes>> if code != 0 -> {
-      use #(value, rest) <- result.try(read_c_string(rest))
+      use #(value, rest) <- try(read_c_string(rest))
       decode_fields(rest, [#(byte_to_string(code), value), ..fields])
     }
-    _ -> Ok(list.reverse(fields))
+    _ -> Ok(reverse(fields))
   }
 }
 
@@ -830,11 +829,11 @@ fn decode_values(
   values: List(Option(String)),
 ) -> Result(List(Option(String)), WireError) {
   case count, body {
-    0, _ -> Ok(list.reverse(values))
+    0, _ -> Ok(reverse(values))
     _, <<-1:32-signed, rest:bytes>> ->
       decode_values(rest, count - 1, [None, ..values])
     _, <<length:32, value:bytes-size(length), rest:bytes>> -> {
-      use text <- result.try(decode_text(value))
+      use text <- try(decode_text(value))
       decode_values(rest, count - 1, [Some(text), ..values])
     }
     _, _ -> Error(malformed("DataRow"))
@@ -854,9 +853,9 @@ fn decode_field_list(
   fields: List(Field),
 ) -> Result(List(Field), WireError) {
   case count {
-    0 -> Ok(list.reverse(fields))
+    0 -> Ok(reverse(fields))
     _ -> {
-      use #(name, rest) <- result.try(read_c_string(body))
+      use #(name, rest) <- try(read_c_string(body))
       decode_field(name, rest, count, fields)
     }
   }
@@ -901,7 +900,7 @@ fn decode_oids(
   oids: List(Int),
 ) -> Result(List(Int), WireError) {
   case count, body {
-    0, _ -> Ok(list.reverse(oids))
+    0, _ -> Ok(reverse(oids))
     _, <<oid:32, rest:bytes>> -> decode_oids(rest, count - 1, [oid, ..oids])
     _, _ -> Error(malformed("ParameterDescription"))
   }

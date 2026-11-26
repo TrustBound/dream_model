@@ -25,11 +25,13 @@
 //// only the comment block at the top of the file counts.
 
 import dream_model/nullability/hint
-import gleam/int
-import gleam/list
+import gleam/int.{to_string}
+import gleam/list.{all, append, filter, find, fold, index_map, reverse, try_fold}
 import gleam/option.{type Option, None, Some}
-import gleam/result
-import gleam/string
+import gleam/result.{try, values}
+import gleam/string.{
+  contains, lowercase, split, split_once, to_graphemes, trim, trim_start,
+}
 
 /// What a generated function returns.
 pub type Returns {
@@ -94,8 +96,8 @@ type Line {
 pub fn parse(sql: String) -> Result(QueryHints, List(HintError)) {
   let lines =
     hint.leading_lines(sql)
-    |> list.index_map(fn(text, index) { read_line(text, index + 1) })
-    |> result.values
+    |> index_map(fn(text, index) { read_line(text, index + 1) })
+    |> values
   let empty =
     QueryHints(
       returns: None,
@@ -104,10 +106,10 @@ pub fn parse(sql: String) -> Result(QueryHints, List(HintError)) {
       column_names: [],
       element_names: [],
     )
-  let #(hints, errors) = list.fold(lines, #(empty, []), add_line)
+  let #(hints, errors) = fold(lines, #(empty, []), add_line)
   case errors {
     [] -> Ok(hints)
-    _ -> Error(list.reverse(errors))
+    _ -> Error(reverse(errors))
   }
 }
 
@@ -130,15 +132,15 @@ pub fn returns_to_string(returns: Returns) -> String {
 }
 
 fn read_line(text: String, number: Int) -> Result(Line, Nil) {
-  case string.trim_start(text) {
-    "--" <> comment -> split_comment(string.trim(comment), number)
+  case trim_start(text) {
+    "--" <> comment -> split_comment(trim(comment), number)
     _ -> Error(Nil)
   }
 }
 
 fn split_comment(comment: String, number: Int) -> Result(Line, Nil) {
-  use #(key, value) <- result.map(string.split_once(comment, ":"))
-  Line(number:, key: string.trim(key), value: string.trim(value))
+  use #(key, value) <- result.map(split_once(comment, ":"))
+  Line(number:, key: trim(key), value: trim(value))
 }
 
 fn add_line(
@@ -146,7 +148,7 @@ fn add_line(
   line: Line,
 ) -> #(QueryHints, List(HintError)) {
   let #(hints, errors) = state
-  let added = case string.lowercase(line.key) {
+  let added = case lowercase(line.key) {
     "returns" -> add_returns(hints, line)
     "not found" ->
       Error(
@@ -159,9 +161,9 @@ fn add_line(
     "unique " <> constraint ->
       Error(
         "'"
-        <> string.trim(line.key <> ": " <> line.value)
+        <> trim(line.key <> ": " <> line.value)
         <> "' is the old form of the unique hint, and a hint holds no message now; write 'unique: "
-        <> string.trim(constraint)
+        <> trim(constraint)
         <> "' and write the text for the user where the app maps dream_errors.Conflict",
       )
     _ -> Ok(hints)
@@ -175,26 +177,26 @@ fn add_line(
 fn add_column_names(hints: QueryHints, line: Line) -> QueryHints {
   QueryHints(
     ..hints,
-    column_names: list.append(hints.column_names, named_lines(line)),
+    column_names: append(hints.column_names, named_lines(line)),
   )
 }
 
 fn add_element_names(hints: QueryHints, line: Line) -> QueryHints {
   QueryHints(
     ..hints,
-    element_names: list.append(hints.element_names, named_lines(line)),
+    element_names: append(hints.element_names, named_lines(line)),
   )
 }
 
 fn named_lines(line: Line) -> List(NamedLine) {
-  string.split(line.value, ",")
-  |> list.map(string.trim)
-  |> list.filter(fn(name) { name != "" })
+  split(line.value, ",")
+  |> list.map(trim)
+  |> filter(fn(name) { name != "" })
   |> list.map(NamedLine(_, line.number))
 }
 
 fn add_returns(hints: QueryHints, line: Line) -> Result(QueryHints, String) {
-  use Nil <- result.try(refuse_second(
+  use Nil <- try(refuse_second(
     hints.returns |> option.map(fn(hint) { hint.line }),
     "returns",
   ))
@@ -209,7 +211,7 @@ fn refuse_second(earlier: Option(Int), key: String) -> Result(Nil, String) {
         "a second '"
         <> key
         <> "' hint; the first one is on line "
-        <> int.to_string(line),
+        <> to_string(line),
       )
     None -> Ok(Nil)
   }
@@ -217,8 +219,8 @@ fn refuse_second(earlier: Option(Int), key: String) -> Result(Nil, String) {
 
 fn parse_returns(line: Line) -> Result(ReturnsHint, String) {
   let words =
-    string.split(line.value, " ")
-    |> list.filter(fn(word) { word != "" })
+    split(line.value, " ")
+    |> filter(fn(word) { word != "" })
   case words {
     [form] -> parse_form(form) |> result.map(ReturnsHint(_, None, line.number))
     [form, type_text] -> parse_form_and_type(form, type_text, line.number)
@@ -236,7 +238,7 @@ fn parse_form_and_type(
   type_text: String,
   line: Int,
 ) -> Result(ReturnsHint, String) {
-  use returns <- result.try(parse_form(form))
+  use returns <- try(parse_form(form))
   use <- refuse_type_of_none(returns)
   use type_name <- result.map(parse_type_name(type_text))
   ReturnsHint(returns, Some(type_name), line)
@@ -253,7 +255,7 @@ fn refuse_type_of_none(
 }
 
 fn parse_form(form: String) -> Result(Returns, String) {
-  case string.lowercase(form) {
+  case lowercase(form) {
     "one" -> Ok(ReturnsOne)
     "maybe" -> Ok(ReturnsMaybe)
     "many" -> Ok(ReturnsMany)
@@ -266,7 +268,7 @@ fn parse_form(form: String) -> Result(Returns, String) {
 }
 
 fn parse_type_name(text: String) -> Result(TypeName, String) {
-  case string.split_once(text, ".") {
+  case split_once(text, ".") {
     Ok(#(module, name)) -> parse_module_type(module, name, text)
     Error(Nil) -> check_type_name(name: text, text:) |> result.map(LocalType)
   }
@@ -277,8 +279,8 @@ fn parse_module_type(
   name: String,
   text: String,
 ) -> Result(TypeName, String) {
-  use name <- result.try(check_type_name(name:, text:))
-  case list.all(string.split(module, "/"), is_module_segment) {
+  use name <- try(check_type_name(name:, text:))
+  case all(split(module, "/"), is_module_segment) {
     True -> Ok(ModuleType(module:, name:))
     False ->
       Error(
@@ -307,14 +309,11 @@ fn check_type_name(
 /// Returns True for a Gleam type name: a capital letter, then letters and
 /// digits.
 pub fn is_type_name(name: String) -> Bool {
-  case string.to_graphemes(name) {
+  case to_graphemes(name) {
     [first, ..rest] ->
-      string.contains(uppercase_letters, first)
-      && list.all(rest, fn(character) {
-        string.contains(
-          uppercase_letters <> lowercase_letters <> digits,
-          character,
-        )
+      contains(uppercase_letters, first)
+      && all(rest, fn(character) {
+        contains(uppercase_letters <> lowercase_letters <> digits, character)
       })
     [] -> False
   }
@@ -323,11 +322,11 @@ pub fn is_type_name(name: String) -> Bool {
 /// Returns True for one segment of a Gleam module path: a lowercase letter,
 /// then lowercase letters, digits and underscores.
 pub fn is_module_segment(segment: String) -> Bool {
-  case string.to_graphemes(segment) {
+  case to_graphemes(segment) {
     [first, ..rest] ->
-      string.contains(lowercase_letters, first)
-      && list.all(rest, fn(character) {
-        string.contains(lowercase_letters <> digits <> "_", character)
+      contains(lowercase_letters, first)
+      && all(rest, fn(character) {
+        contains(lowercase_letters <> digits <> "_", character)
       })
     [] -> False
   }
@@ -345,7 +344,7 @@ fn add_unique(hints: QueryHints, line: Line) -> Result(QueryHints, String) {
       Error(
         "the 'unique' hint names no constraint; write 'unique: <constraint>', for example 'unique: users_email_key'",
       )
-    names -> list.try_fold(names, hints, add_unique_name)
+    names -> try_fold(names, hints, add_unique_name)
   }
 }
 
@@ -353,19 +352,19 @@ fn add_unique_name(
   hints: QueryHints,
   named: NamedLine,
 ) -> Result(QueryHints, String) {
-  case list.find(hints.unique, fn(hint) { hint.constraint == named.name }) {
+  case find(hints.unique, fn(hint) { hint.constraint == named.name }) {
     Ok(earlier) ->
       Error(
         "the constraint '"
         <> named.name
         <> "' is in a 'unique' hint a second time; the first one is on line "
-        <> int.to_string(earlier.line),
+        <> to_string(earlier.line),
       )
     Error(Nil) ->
       Ok(
         QueryHints(
           ..hints,
-          unique: list.append(hints.unique, [
+          unique: append(hints.unique, [
             UniqueHint(constraint: named.name, line: named.line),
           ]),
         ),

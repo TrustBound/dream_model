@@ -6,15 +6,15 @@
 //// `create` drops and creates the database on a server, so each test run
 //// starts from the same state.
 
-import dream_model/postgres/wire
-import fixtures/servers
-import gleam/list
-import gleam/result
+import dream_model/postgres/wire.{close, error_to_string, simple_query}
+import fixtures/servers.{connect, database_name, default_database}
+import gleam/list.{append}
+import gleam/result.{map_error, replace, try}
 
 /// The name of the attack database on each server, with the prefix of
 /// `servers.database_name`.
 pub fn database() -> String {
-  servers.database_name("dream_model_attack")
+  database_name("dream_model_attack")
 }
 
 /// The schema on every version.
@@ -174,7 +174,7 @@ pub const data_sets_18 = [
 /// Returns the data sets of a version.
 pub fn data_sets_for(version: Int) -> List(#(String, String)) {
   case version >= 18 {
-    True -> list.append(data_sets, data_sets_18)
+    True -> append(data_sets, data_sets_18)
     False -> data_sets
   }
 }
@@ -183,28 +183,28 @@ pub fn data_sets_for(version: Int) -> List(#(String, String)) {
 /// creates the schema in it.
 pub fn create(version: Int) -> Result(Nil, String) {
   let database = database()
-  let admin = servers.connect(version, servers.default_database)
+  let admin = connect(version, default_database)
   let created = {
-    use _ <- result.try(wire.simple_query(
+    use _ <- try(simple_query(
       admin,
       "drop database if exists " <> database <> " with (force)",
     ))
-    wire.simple_query(admin, "create database " <> database)
+    simple_query(admin, "create database " <> database)
   }
-  let _ = wire.close(admin)
-  use _ <- result.try(created |> result.map_error(wire.error_to_string))
-  let connection = servers.connect(version, database)
+  let _ = close(admin)
+  use _ <- try(created |> map_error(error_to_string))
+  let connection = connect(version, database)
   let filled = {
-    use _ <- result.try(wire.simple_query(connection, schema))
-    use _ <- result.try(wire.simple_query(connection, schema_computed))
-    use _ <- result.try(wire.simple_query(connection, schema_review))
+    use _ <- try(simple_query(connection, schema))
+    use _ <- try(simple_query(connection, schema_computed))
+    use _ <- try(simple_query(connection, schema_review))
     case version >= 18 {
-      True -> wire.simple_query(connection, schema_18)
+      True -> simple_query(connection, schema_18)
       False -> Ok([])
     }
   }
-  let _ = wire.close(connection)
+  let _ = close(connection)
   filled
-  |> result.replace(Nil)
-  |> result.map_error(wire.error_to_string)
+  |> replace(Nil)
+  |> map_error(error_to_string)
 }

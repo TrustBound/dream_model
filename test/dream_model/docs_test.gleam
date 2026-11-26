@@ -9,18 +9,28 @@ import dream_model/generator/gleam_type.{
 }
 import dream_model/generator/model.{Unit}
 import dream_model/generator/query.{Model, Problem, RecordOutput}
-import dream_model/nullability
-import dream_model/nullability/reason.{type ColumnReason, type ParameterReason}
+import dream_model/nullability.{type Analysis, close, connect}
+import dream_model/nullability/reason.{
+  type ColumnReason, type ParameterReason, AlsoUsedOutsideStore, BeforeTrigger,
+  CastToDomainWithCheck, CastToNotNullDomain, CheckConstraint,
+  ChildTableAllowsNull, ColumnAllowsNull, ColumnIsNotNull, ComputedValue,
+  CountAggregate, DomainCheck, DomainNotNull, GeneratedColumnUsesIt, GroupingSet,
+  MergeNotMatchedBySource, NotNullInSchema, NotNullNotValid, NullableHint,
+  OuterJoinOrGroupingSet, ParamsHint, PartitionCheck, PartitionKey,
+  PartitionNotNull, RangeResult, RecursiveCte, RelationKindWithoutNotNull,
+  RelationNotTable, Required, ReturningOldNew, RowLevelSecurity, RuleAddsQueries,
+  StoredIntoNullableColumn, ViewCheckOption, WholeRow,
+}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
-import dream_test/unit.{describe, group, it}
-import fixtures/attack_database
+import dream_test/unit.{type UnitNode, describe, group, it}
+import fixtures/attack_database.{database}
 import fixtures/model_database
 import fixtures/servers
-import gleam/int
-import gleam/list
-import gleam/result
-import simplifile
+import gleam/int.{to_string}
+import gleam/list.{filter}
+import gleam/result.{replace, replace_error, try}
+import simplifile.{read}
 
 const why_option_folder = "test/snippets/why_option/"
 
@@ -36,37 +46,33 @@ pub type Decisions {
 }
 
 pub fn tests(version: Int) -> TestSuite {
-  describe(
-    "the SQL files of the guides on PostgreSQL " <> int.to_string(version),
-    [
-      group(
-        "why-option.md",
-        why_option_cases(version)
-          |> list.filter(fn(example) { version >= example.1 })
-          |> list.map(why_option_test(version, _)),
-      ),
-      group("types.md", list.map(type_cases(), type_test(version, _))),
-      group("hints.md", hint_tests(version)),
-    ],
-  )
+  describe("the SQL files of the guides on PostgreSQL " <> to_string(version), [
+    group(
+      "why-option.md",
+      why_option_cases(version)
+        |> filter(fn(example) { version >= example.1 })
+        |> list.map(why_option_test(version, _)),
+    ),
+    group("types.md", list.map(type_cases(), type_test(version, _))),
+    group("hints.md", hint_tests(version)),
+  ])
 }
 
 fn why_option_test(
   version: Int,
   example: #(String, Int, Decisions),
-) -> unit.UnitNode {
+) -> UnitNode {
   let #(file, _minimum_version, expected) = example
   it(file <> " gives the reasons of the guide", fn() {
     // Arrange
-    let assert Ok(sql) = simplifile.read(why_option_folder <> file)
-    let assert Ok(analyzer) =
-      nullability.connect(servers.url(version, attack_database.database()))
+    let assert Ok(sql) = read(why_option_folder <> file)
+    let assert Ok(analyzer) = connect(servers.url(version, database()))
 
     // Act
     let decisions =
       nullability.analyze(analyzer, sql)
       |> result.map(fn(found) {
-        let _ = nullability.close(found.1)
+        let _ = close(found.1)
         summarize(found.0)
       })
 
@@ -78,7 +84,7 @@ fn why_option_test(
   })
 }
 
-fn summarize(analysis: nullability.Analysis) -> Decisions {
+fn summarize(analysis: Analysis) -> Decisions {
   Decisions(
     columns: list.map(analysis.columns, fn(column) {
       #(column.name, !column.not_null, column.reason)
@@ -93,8 +99,8 @@ fn summarize(analysis: nullability.Analysis) -> Decisions {
 /// column is `True` when it is `Option`.
 fn why_option_cases(version: Int) -> List(#(String, Int, Decisions)) {
   let grouping = case version >= 18 {
-    True -> reason.OuterJoinOrGroupingSet
-    False -> reason.GroupingSet
+    True -> OuterJoinOrGroupingSet
+    False -> GroupingSet
   }
   [
     #(
@@ -102,8 +108,8 @@ fn why_option_cases(version: Int) -> List(#(String, Int, Decisions)) {
       16,
       Decisions(
         columns: [
-          #("id", False, reason.NotNullInSchema),
-          #("nickname", True, reason.ColumnAllowsNull),
+          #("id", False, NotNullInSchema),
+          #("nickname", True, ColumnAllowsNull),
         ],
         parameters: [],
       ),
@@ -113,8 +119,8 @@ fn why_option_cases(version: Int) -> List(#(String, Int, Decisions)) {
       16,
       Decisions(
         columns: [
-          #("email", False, reason.NotNullInSchema),
-          #("title", True, reason.OuterJoinOrGroupingSet),
+          #("email", False, NotNullInSchema),
+          #("title", True, OuterJoinOrGroupingSet),
         ],
         parameters: [],
       ),
@@ -125,7 +131,7 @@ fn why_option_cases(version: Int) -> List(#(String, Int, Decisions)) {
       Decisions(
         columns: [
           #("email", True, grouping),
-          #("total", False, reason.CountAggregate),
+          #("total", False, CountAggregate),
         ],
         parameters: [],
       ),
@@ -134,63 +140,57 @@ fn why_option_cases(version: Int) -> List(#(String, Int, Decisions)) {
       "computed_value.sql",
       16,
       Decisions(
-        columns: [#("low", True, reason.ComputedValue("funcexpr"))],
+        columns: [#("low", True, ComputedValue("funcexpr"))],
         parameters: [],
       ),
     ),
     #(
       "whole_row.sql",
       16,
-      Decisions(columns: [#("u", True, reason.WholeRow)], parameters: []),
+      Decisions(columns: [#("u", True, WholeRow)], parameters: []),
     ),
     #(
       "materialized_view.sql",
       16,
       Decisions(
-        columns: [#("email", True, reason.RelationKindWithoutNotNull("m"))],
+        columns: [#("email", True, RelationKindWithoutNotNull("m"))],
         parameters: [],
       ),
     ),
     #(
       "recursive_cte.sql",
       16,
-      Decisions(columns: [#("e", True, reason.RecursiveCte)], parameters: []),
+      Decisions(columns: [#("e", True, RecursiveCte)], parameters: []),
     ),
     #(
       "values_list.sql",
       16,
-      Decisions(
-        columns: [#("a", True, reason.RangeResult("values"))],
-        parameters: [],
-      ),
+      Decisions(columns: [#("a", True, RangeResult("values"))], parameters: []),
     ),
     #(
       "child_table.sql",
       18,
       Decisions(
-        columns: [#("label", True, reason.ChildTableAllowsNull)],
+        columns: [#("label", True, ChildTableAllowsNull)],
         parameters: [],
       ),
     ),
     #(
       "not_valid.sql",
       18,
-      Decisions(
-        columns: [#("code", True, reason.NotNullNotValid)],
-        parameters: [],
-      ),
+      Decisions(columns: [#("code", True, NotNullNotValid)], parameters: []),
     ),
     #(
       "returning_old_new.sql",
       18,
       Decisions(
         columns: [
-          #("email", True, reason.ReturningOldNew),
-          #("email", False, reason.NotNullInSchema),
+          #("email", True, ReturningOldNew),
+          #("email", False, NotNullInSchema),
         ],
         parameters: [
-          #(1, False, reason.ColumnIsNotNull),
-          #(2, False, reason.ColumnIsNotNull),
+          #(1, False, ColumnIsNotNull),
+          #(2, False, ColumnIsNotNull),
         ],
       ),
     ),
@@ -199,8 +199,8 @@ fn why_option_cases(version: Int) -> List(#(String, Int, Decisions)) {
       17,
       Decisions(
         columns: [
-          #("email", False, reason.NotNullInSchema),
-          #("title", True, reason.MergeNotMatchedBySource),
+          #("email", False, NotNullInSchema),
+          #("title", True, MergeNotMatchedBySource),
         ],
         parameters: [],
       ),
@@ -208,173 +208,170 @@ fn why_option_cases(version: Int) -> List(#(String, Int, Decisions)) {
     #(
       "nullable_hint.sql",
       16,
-      Decisions(
-        columns: [#("email", True, reason.NullableHint)],
-        parameters: [],
-      ),
+      Decisions(columns: [#("email", True, NullableHint)], parameters: []),
     ),
     #(
       "parameter_store.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.DomainNotNull),
-        #(3, True, reason.StoredIntoNullableColumn),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, DomainNotNull),
+        #(3, True, StoredIntoNullableColumn),
       ]),
     ),
     #(
       "parameter_length.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, True, reason.StoredIntoNullableColumn),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, True, StoredIntoNullableColumn),
       ]),
     ),
     #(
       "parameter_hint.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, True, reason.ParamsHint),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, True, ParamsHint),
       ]),
     ),
     #(
       "parameter_compared.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.Required),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, Required),
       ]),
     ),
     #(
       "parameter_also_used.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.AlsoUsedOutsideStore),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, AlsoUsedOutsideStore),
       ]),
     ),
     #(
       "parameter_domain_check.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.DomainCheck),
-        #(3, True, reason.StoredIntoNullableColumn),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, DomainCheck),
+        #(3, True, StoredIntoNullableColumn),
       ]),
     ),
     #(
       "parameter_check.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.CheckConstraint),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, CheckConstraint),
       ]),
     ),
     #(
       "parameter_partition.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.ColumnIsNotNull),
-        #(3, False, reason.PartitionNotNull),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, ColumnIsNotNull),
+        #(3, False, PartitionNotNull),
       ]),
     ),
     #(
       "parameter_partition_check.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.ColumnIsNotNull),
-        #(3, False, reason.PartitionCheck),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, ColumnIsNotNull),
+        #(3, False, PartitionCheck),
       ]),
     ),
     #(
       "parameter_trigger.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.ColumnIsNotNull),
-        #(3, False, reason.BeforeTrigger),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, ColumnIsNotNull),
+        #(3, False, BeforeTrigger),
       ]),
     ),
     #(
       "parameter_row_security.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.RowLevelSecurity),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, RowLevelSecurity),
       ]),
     ),
     #(
       "parameter_rule.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.RuleAddsQueries(2)),
-        #(2, False, reason.RuleAddsQueries(2)),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, RuleAddsQueries(2)),
+        #(2, False, RuleAddsQueries(2)),
       ]),
     ),
     #(
       "parameter_cast_domain.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.CastToNotNullDomain),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, CastToNotNullDomain),
       ]),
     ),
     #(
       "parameter_cast_domain_check.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.CastToDomainWithCheck),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, CastToDomainWithCheck),
       ]),
     ),
     #(
       "parameter_generated.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.GeneratedColumnUsesIt),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, GeneratedColumnUsesIt),
       ]),
     ),
     #(
       "parameter_partition_key.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.PartitionKey),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, PartitionKey),
       ]),
     ),
     #(
       "parameter_check_option.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.ViewCheckOption),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, ViewCheckOption),
       ]),
     ),
     #(
       "parameter_view_trigger.sql",
       16,
       Decisions(
-        columns: [#("id", True, reason.RelationKindWithoutNotNull("v"))],
+        columns: [#("id", True, RelationKindWithoutNotNull("v"))],
         parameters: [
-          #(1, False, reason.RelationNotTable("v")),
-          #(2, False, reason.RelationNotTable("v")),
+          #(1, False, RelationNotTable("v")),
+          #(2, False, RelationNotTable("v")),
         ],
       ),
     ),
     #(
       "parameter_whole_row_check.sql",
       16,
-      Decisions(columns: [#("id", False, reason.NotNullInSchema)], parameters: [
-        #(1, False, reason.ColumnIsNotNull),
-        #(2, False, reason.CheckConstraint),
+      Decisions(columns: [#("id", False, NotNullInSchema)], parameters: [
+        #(1, False, ColumnIsNotNull),
+        #(2, False, CheckConstraint),
       ]),
     ),
     #(
       "foreign_child.sql",
       16,
       Decisions(
-        columns: [#("id", True, reason.RelationKindWithoutNotNull("f"))],
+        columns: [#("id", True, RelationKindWithoutNotNull("f"))],
         parameters: [],
       ),
     ),
@@ -384,12 +381,12 @@ fn why_option_cases(version: Int) -> List(#(String, Int, Decisions)) {
 fn type_test(
   version: Int,
   example: #(String, List(#(String, GleamType, Bool))),
-) -> unit.UnitNode {
+) -> UnitNode {
   let #(file, expected) = example
   it(file <> " gives the fields of the guide", fn() {
     // Arrange
-    let assert Ok(sql) = simplifile.read(types_folder <> file)
-    let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+    let assert Ok(sql) = read(types_folder <> file)
+    let assert Ok(analyzer) = connect(model_database.url(version))
 
     // Act
     let #(found, analyzer) =
@@ -399,11 +396,11 @@ fn type_test(
         "src/app/models/sample/" <> file,
         sql,
       )
-    let _ = nullability.close(analyzer)
+    let _ = close(analyzer)
     let fields =
       found
-      |> result.replace_error(Nil)
-      |> result.try(fn(described) {
+      |> replace_error(Nil)
+      |> try(fn(described) {
         case described.output {
           RecordOutput(fields:, ..) ->
             Ok(
@@ -446,18 +443,18 @@ const hints_folder = "test/snippets/hints/"
 
 /// Each SQL file of hints.md that dream_model refuses, with the problems
 /// of the guide.
-fn hint_tests(version: Int) -> List(unit.UnitNode) {
+fn hint_tests(version: Int) -> List(UnitNode) {
   [
     it("reserved_type.sql gives the refusal of the guide", fn() {
       // Arrange
       let file = "src/app/models/user/find.sql"
-      let assert Ok(sql) = simplifile.read(hints_folder <> "reserved_type.sql")
-      let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+      let assert Ok(sql) = read(hints_folder <> "reserved_type.sql")
+      let assert Ok(analyzer) = connect(model_database.url(version))
       let model_info = Model(module: "app/models/user", type_name: "User")
 
       // Act
       let #(found, analyzer) = query.analyze(analyzer, model_info, file, sql)
-      let _ = nullability.close(analyzer)
+      let _ = close(analyzer)
       let assert Ok(found) = found
       let rendered =
         model.render(
@@ -484,18 +481,17 @@ fn hint_tests(version: Int) -> List(unit.UnitNode) {
     it("reserved_parameter.sql gives the refusal of the guide", fn() {
       // Arrange
       let file = "src/app/models/user/after.sql"
-      let assert Ok(sql) =
-        simplifile.read(hints_folder <> "reserved_parameter.sql")
-      let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+      let assert Ok(sql) = read(hints_folder <> "reserved_parameter.sql")
+      let assert Ok(analyzer) = connect(model_database.url(version))
       let model_info = Model(module: "app/models/user", type_name: "User")
 
       // Act
       let #(found, analyzer) = query.analyze(analyzer, model_info, file, sql)
-      let _ = nullability.close(analyzer)
+      let _ = close(analyzer)
 
       // Assert
       found
-      |> result.replace(Nil)
+      |> replace(Nil)
       |> should
       |> be_equal(
         Error([

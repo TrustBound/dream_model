@@ -1,13 +1,13 @@
 //// Tests for `dream_model/generator/fingerprint`: the hash must equal what
 //// dream_postgres's `client.schema_fingerprint` gives on each version.
 
-import dream_model/generator/fingerprint
-import dream_model/nullability
-import dream_postgres/client
+import dream_model/generator/fingerprint.{text_array_literal}
+import dream_model/nullability.{close, connect}
+import dream_postgres/client.{from_url, schema_fingerprint}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import fixtures/model_database
+import fixtures/model_database.{url}
 
 pub fn tests(version: Int) -> TestSuite {
   describe("dream_model/generator/fingerprint", [
@@ -42,8 +42,7 @@ pub fn tests(version: Int) -> TestSuite {
     group("text_array_literal", [
       it("quotes and escapes each item", fn() {
         // Act
-        let text =
-          fingerprint.text_array_literal(["a", "b\"c", "d\\e", "public.\"x\""])
+        let text = text_array_literal(["a", "b\"c", "d\\e", "public.\"x\""])
 
         // Assert
         text
@@ -56,9 +55,9 @@ pub fn tests(version: Int) -> TestSuite {
 }
 
 fn compute(version: Int, tables: List(String)) -> Result(String, Nil) {
-  let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+  let assert Ok(analyzer) = connect(url(version))
   let found = fingerprint.compute(analyzer, tables)
-  let _ = nullability.close(analyzer)
+  let _ = close(analyzer)
   case found {
     Ok(hash) -> Ok(hash)
     Error(_) -> Error(Nil)
@@ -66,8 +65,8 @@ fn compute(version: Int, tables: List(String)) -> Result(String, Nil) {
 }
 
 fn expected(version: Int, tables: List(String)) -> Result(String, Nil) {
-  let assert Ok(connection) = client.from_url(model_database.url(version))
-  case client.schema_fingerprint(connection, tables) {
+  let assert Ok(connection) = from_url(url(version))
+  case schema_fingerprint(connection, tables) {
     Ok(hash) -> Ok(hash)
     Error(_) -> Error(Nil)
   }

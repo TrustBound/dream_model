@@ -4,25 +4,30 @@
 //// server, and on a fake server for what a real server never sends: other
 //// authentication methods, TLS, and malformed messages.
 
-import dream_model/postgres/scram
+import dream_model/postgres/scram.{
+  MalformedServerMessage, NonceMismatch, ServerSignatureMismatch,
+}
 import dream_model/postgres/wire.{
-  CleartextWithoutTls, Config, ConnectFailed, Description, Field, InvalidUrl,
-  NoTls, Notice, PasswordMissing, ProtocolViolation, ScramFailed, ServerError,
-  SocketFailed, TlsFailed, TlsRefused, TlsWithVerification,
-  TlsWithoutVerification, UnsupportedAuthentication,
+  type Connection, type WireError, CleartextWithoutTls, Config, ConnectFailed,
+  Description, Field, InvalidUrl, NoTls, Notice, PasswordMissing,
+  ProtocolViolation, ScramFailed, ServerError, SocketFailed, TlsFailed,
+  TlsRefused, TlsWithVerification, TlsWithoutVerification,
+  UnsupportedAuthentication, close, error_to_string, execute, get_field,
+  get_parameter, parse_url, simple_query,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/fake_server.{
-  AcceptTls, AnswerSslRequest, Close, ExpectMessage, ReceiveMessage,
-  ReceiveStartup, ScramServerFirst, Send,
+  type Step, AcceptTls, AnswerSslRequest, Close, ExpectMessage, ReceiveMessage,
+  ReceiveStartup, ScramServerFirst, Send, authentication_ok, message, ready,
+  start, start_with_query,
 }
-import fixtures/servers
-import gleam/list
+import fixtures/servers.{default_database}
+import gleam/list.{append, filter_map}
 import gleam/option.{None, Some}
-import gleam/result
-import gleam/string
+import gleam/result.{map_error, try, unwrap}
+import gleam/string.{inspect}
 
 pub fn tests(version: Int) -> TestSuite {
   describe("dream_model/postgres/wire", [
@@ -44,7 +49,7 @@ fn url_case(name: String, url: String, expected: wire.Config) {
     let text = url
 
     // Act
-    let parsed = wire.parse_url(text)
+    let parsed = parse_url(text)
 
     // Assert
     parsed
@@ -113,7 +118,7 @@ fn url_error_case(name: String, url: String, reason: String) {
     let text = url
 
     // Act
-    let parsed = wire.parse_url(text)
+    let parsed = parse_url(text)
 
     // Assert
     parsed
@@ -195,23 +200,23 @@ fn parse_url_error_tests() {
 
 // --- A real server ---------------------------------------------------------
 
-fn connect_url(url: String) -> Result(wire.Connection, wire.WireError) {
-  wire.parse_url(url) |> result.try(wire.connect)
+fn connect_url(url: String) -> Result(Connection, WireError) {
+  parse_url(url) |> try(wire.connect)
 }
 
 fn server_case(
   name: String,
   version: Int,
-  run: fn(wire.Connection) -> a,
+  run: fn(Connection) -> a,
   expected: a,
 ) {
   it(name, fn() {
     // Arrange
-    let connection = servers.connect(version, servers.default_database)
+    let connection = servers.connect(version, default_database)
 
     // Act
     let actual = run(connection)
-    let _ = wire.close(connection)
+    let _ = close(connection)
 
     // Assert
     actual
@@ -221,10 +226,10 @@ fn server_case(
   })
 }
 
-fn error_code(error: wire.WireError) -> String {
+fn error_code(error: WireError) -> String {
   case error {
-    ServerError(fields) -> wire.get_field(fields, "C") |> result.unwrap("")
-    other -> string.inspect(other)
+    ServerError(fields) -> get_field(fields, "C") |> unwrap("")
+    other -> inspect(other)
   }
 }
 
@@ -233,33 +238,33 @@ fn server_tests(version: Int) {
     server_case(
       "get_parameter returns a parameter that the server reported",
       version,
-      wire.get_parameter(_, "client_encoding"),
+      get_parameter(_, "client_encoding"),
       Ok("UTF8"),
     ),
     server_case(
       "get_parameter returns an error for an unknown parameter",
       version,
-      wire.get_parameter(_, "no_such_parameter"),
+      get_parameter(_, "no_such_parameter"),
       Error(Nil),
     ),
     server_case(
       "simple_query returns each value as text, and NULL as None",
       version,
-      wire.simple_query(_, "select 1, null::int, 'a'"),
+      simple_query(_, "select 1, null::int, 'a'"),
       Ok([[Some("1"), None, Some("a")]]),
     ),
     server_case(
       "simple_query returns the rows of every statement",
       version,
-      wire.simple_query(_, "select 1; select 2"),
+      simple_query(_, "select 1; select 2"),
       Ok([[Some("1")], [Some("2")]]),
     ),
     server_case(
       "simple_query returns the server error with its fields",
       version,
       fn(connection) {
-        wire.simple_query(connection, "select 1 / 0")
-        |> result.map_error(error_code)
+        simple_query(connection, "select 1 / 0")
+        |> map_error(error_code)
       },
       Error("22012"),
     ),
@@ -267,15 +272,15 @@ fn server_tests(version: Int) {
       "the connection stays usable after an error",
       version,
       fn(connection) {
-        let _ = wire.simple_query(connection, "select 1 / 0")
-        wire.simple_query(connection, "select 3")
+        let _ = simple_query(connection, "select 1 / 0")
+        simple_query(connection, "select 3")
       },
       Ok([[Some("3")]]),
     ),
     server_case(
       "execute binds text parameters and NULL",
       version,
-      wire.execute(_, "select $1::int + 1, $2::text is null", [Some("41"), None]),
+      execute(_, "select $1::int + 1, $2::text is null", [Some("41"), None]),
       Ok([[Some("42"), Some("t")]]),
     ),
     server_case(
@@ -310,12 +315,12 @@ fn server_tests(version: Int) {
       "describe returns the notices that the server sent",
       version,
       fn(connection) {
-        let _ = wire.simple_query(connection, "set client_min_messages = log")
-        let _ = wire.simple_query(connection, "set debug_print_parse = on")
+        let _ = simple_query(connection, "set client_min_messages = log")
+        let _ = simple_query(connection, "set debug_print_parse = on")
         wire.describe(connection, "select 1")
         |> result.map(fn(description) {
-          list.filter_map(description.notices, fn(notice) {
-            wire.get_field(notice.fields, "M")
+          filter_map(description.notices, fn(notice) {
+            get_field(notice.fields, "M")
           })
         })
       },
@@ -323,14 +328,13 @@ fn server_tests(version: Int) {
     ),
     it("connect sends the startup options", fn() {
       // Arrange
-      let assert Ok(config) =
-        wire.parse_url(servers.url(version, servers.default_database))
+      let assert Ok(config) = parse_url(servers.url(version, default_database))
       let config = wire.Config(..config, options: "-c search_path=custom")
       let assert Ok(connection) = wire.connect(config)
 
       // Act
-      let rows = wire.simple_query(connection, "show search_path")
-      let _ = wire.close(connection)
+      let rows = simple_query(connection, "show search_path")
+      let _ = close(connection)
 
       // Assert
       rows
@@ -342,7 +346,7 @@ fn server_tests(version: Int) {
       // Arrange
       let url =
         string.replace(
-          servers.url(version, servers.default_database),
+          servers.url(version, default_database),
           "dream:dream@",
           "dream:wrong@",
         )
@@ -352,7 +356,7 @@ fn server_tests(version: Int) {
 
       // Assert
       connected
-      |> result.map_error(error_code)
+      |> map_error(error_code)
       |> result.replace(Nil)
       |> should
       |> be_equal(Error("28P01"))
@@ -367,7 +371,7 @@ fn server_tests(version: Int) {
 
       // Assert
       connected
-      |> result.map_error(error_code)
+      |> map_error(error_code)
       |> result.replace(Nil)
       |> should
       |> be_equal(Error("3D000"))
@@ -392,8 +396,8 @@ fn server_tests(version: Int) {
 
 // --- Authentication on a fake server ---------------------------------------
 
-fn fake_case(name: String, steps: List(fake_server.Step), expected) {
-  fake_url_case(name, fake_server.start(steps), expected)
+fn fake_case(name: String, steps: List(Step), expected) {
+  fake_url_case(name, start(steps), expected)
 }
 
 fn fake_url_case(name: String, url: String, expected) {
@@ -403,7 +407,7 @@ fn fake_url_case(name: String, url: String, expected) {
 
     // Act
     let connected = connect_url(address)
-    let _ = result.map(connected, wire.close)
+    let _ = result.map(connected, close)
 
     // Assert
     connected
@@ -414,16 +418,16 @@ fn fake_url_case(name: String, url: String, expected) {
   })
 }
 
-fn after_startup(answer: List(fake_server.Step)) -> List(fake_server.Step) {
+fn after_startup(answer: List(Step)) -> List(Step) {
   [ReceiveStartup, ..answer]
 }
 
-fn ready_steps() -> List(fake_server.Step) {
+fn ready_steps() -> List(Step) {
   [
-    Send(fake_server.authentication_ok()),
-    Send(fake_server.message("S", <<"server_version":utf8, 0, "16.0":utf8, 0>>)),
-    Send(fake_server.message("K", <<1:32, 2:32>>)),
-    Send(fake_server.ready()),
+    Send(authentication_ok()),
+    Send(message("S", <<"server_version":utf8, 0, "16.0":utf8, 0>>)),
+    Send(message("K", <<1:32, 2:32>>)),
+    Send(ready()),
   ]
 }
 
@@ -432,12 +436,12 @@ fn authentication_tests() {
     fake_case("accepts trust", after_startup(ready_steps()), Ok(Nil)),
     fake_url_case(
       "sends the cleartext password over TLS",
-      fake_server.start_with_query(
+      start_with_query(
         [
           AcceptTls,
           ReceiveStartup,
-          Send(fake_server.message("R", <<3:32>>)),
-          ExpectMessage(fake_server.message("p", <<"secret":utf8, 0>>)),
+          Send(message("R", <<3:32>>)),
+          ExpectMessage(message("p", <<"secret":utf8, 0>>)),
           ..ready_steps()
         ],
         "?sslmode=require",
@@ -446,15 +450,15 @@ fn authentication_tests() {
     ),
     fake_case(
       "refuses to send the cleartext password without TLS",
-      after_startup([Send(fake_server.message("R", <<3:32>>))]),
+      after_startup([Send(message("R", <<3:32>>))]),
       Error(CleartextWithoutTls),
     ),
     fake_case(
       "sends the MD5 password",
       after_startup([
-        Send(fake_server.message("R", <<5:32, 1, 2, 3, 4>>)),
+        Send(message("R", <<5:32, 1, 2, 3, 4>>)),
         ExpectMessage(
-          fake_server.message("p", <<
+          message("p", <<
             "md529f38861b864472bf5b524749d1f0a88":utf8,
             0,
           >>),
@@ -466,9 +470,7 @@ fn authentication_tests() {
     fake_url_case(
       "returns PasswordMissing when the URL has no password",
       string.replace(
-        fake_server.start(
-          after_startup([Send(fake_server.message("R", <<5:32, 1, 2, 3, 4>>))]),
-        ),
+        start(after_startup([Send(message("R", <<5:32, 1, 2, 3, 4>>))])),
         "dream:secret@",
         "dream@",
       ),
@@ -476,33 +478,31 @@ fn authentication_tests() {
     ),
     fake_case(
       "refuses an authentication method it does not support",
-      after_startup([Send(fake_server.message("R", <<7:32>>))]),
+      after_startup([Send(message("R", <<7:32>>))]),
       Error(UnsupportedAuthentication("7")),
     ),
     fake_case(
       "refuses SASL without SCRAM-SHA-256",
       after_startup([
-        Send(
-          fake_server.message("R", <<10:32, "SCRAM-SHA-256-PLUS":utf8, 0, 0>>),
-        ),
+        Send(message("R", <<10:32, "SCRAM-SHA-256-PLUS":utf8, 0, 0>>)),
       ]),
       Error(UnsupportedAuthentication("SASL SCRAM-SHA-256-PLUS")),
     ),
     fake_case(
       "refuses a malformed SCRAM server-first message",
       after_startup([
-        Send(fake_server.message("R", <<10:32, "SCRAM-SHA-256":utf8, 0, 0>>)),
+        Send(message("R", <<10:32, "SCRAM-SHA-256":utf8, 0, 0>>)),
         ReceiveMessage,
-        Send(fake_server.message("R", <<11:32, "garbage":utf8>>)),
+        Send(message("R", <<11:32, "garbage":utf8>>)),
       ]),
-      Error(ScramFailed(scram.MalformedServerMessage("garbage"))),
+      Error(ScramFailed(MalformedServerMessage("garbage"))),
     ),
     fake_case(
       "refuses another message during SCRAM",
       after_startup([
-        Send(fake_server.message("R", <<10:32, "SCRAM-SHA-256":utf8, 0, 0>>)),
+        Send(message("R", <<10:32, "SCRAM-SHA-256":utf8, 0, 0>>)),
         ReceiveMessage,
-        Send(fake_server.authentication_ok()),
+        Send(authentication_ok()),
       ]),
       Error(ProtocolViolation(
         "unexpected message R during SCRAM authentication",
@@ -511,30 +511,30 @@ fn authentication_tests() {
     fake_case(
       "refuses a server that cannot prove it knows the password",
       after_startup([
-        Send(fake_server.message("R", <<10:32, "SCRAM-SHA-256":utf8, 0, 0>>)),
+        Send(message("R", <<10:32, "SCRAM-SHA-256":utf8, 0, 0>>)),
         ScramServerFirst(<<"salt":utf8>>, 4096),
         ReceiveMessage,
-        Send(fake_server.message("R", <<12:32, "v=AAAA":utf8>>)),
+        Send(message("R", <<12:32, "v=AAAA":utf8>>)),
       ]),
-      Error(ScramFailed(scram.ServerSignatureMismatch)),
+      Error(ScramFailed(ServerSignatureMismatch)),
     ),
     fake_case(
       "refuses another message during authentication",
-      after_startup([Send(fake_server.ready())]),
+      after_startup([Send(ready())]),
       Error(ProtocolViolation("unexpected message Z during authentication")),
     ),
     fake_case(
       "returns the server error during authentication",
       after_startup([
-        Send(fake_server.message("E", <<"C":utf8, "28000":utf8, 0, 0>>)),
+        Send(message("E", <<"C":utf8, "28000":utf8, 0, 0>>)),
       ]),
       Error(ServerError([#("C", "28000")])),
     ),
     fake_case(
       "returns the server error after authentication",
       after_startup([
-        Send(fake_server.authentication_ok()),
-        Send(fake_server.message("E", <<"C":utf8, "53300":utf8, 0, 0>>)),
+        Send(authentication_ok()),
+        Send(message("E", <<"C":utf8, "53300":utf8, 0, 0>>)),
       ]),
       Error(ServerError([#("C", "53300")])),
     ),
@@ -551,14 +551,14 @@ fn authentication_tests() {
     fake_case(
       "refuses a parameter without its terminator",
       after_startup([
-        Send(fake_server.authentication_ok()),
-        Send(fake_server.message("S", <<"abc":utf8>>)),
+        Send(authentication_ok()),
+        Send(message("S", <<"abc":utf8>>)),
       ]),
       Error(ProtocolViolation("a string has no terminator")),
     ),
     fake_case(
       "refuses an error field without its terminator",
-      after_startup([Send(fake_server.message("E", <<"C":utf8, "28000":utf8>>))]),
+      after_startup([Send(message("E", <<"C":utf8, "28000":utf8>>))]),
       Error(ProtocolViolation("a string has no terminator")),
     ),
   ])
@@ -571,14 +571,14 @@ fn tls_tests(version: Int) {
     it("runs queries over TLS with sslmode=require", fn() {
       // Arrange
       let url =
-        fake_server.start_with_query(
+        start_with_query(
           [
             AcceptTls,
             ReceiveStartup,
-            ..list.append(ready_steps(), [
+            ..append(ready_steps(), [
               ReceiveMessage,
-              Send(fake_server.message("D", <<1:16, 1:32, "7":utf8>>)),
-              Send(fake_server.ready()),
+              Send(message("D", <<1:16, 1:32, "7":utf8>>)),
+              Send(ready()),
             ])
           ],
           "?sslmode=require",
@@ -586,8 +586,8 @@ fn tls_tests(version: Int) {
       let assert Ok(connection) = connect_url(url)
 
       // Act
-      let rows = wire.simple_query(connection, "select 7")
-      let _ = wire.close(connection)
+      let rows = simple_query(connection, "select 7")
+      let _ = close(connection)
 
       // Assert
       rows
@@ -599,8 +599,7 @@ fn tls_tests(version: Int) {
       "returns TlsFailed when sslmode=verify-full cannot verify the server",
       fn() {
         // Arrange
-        let url =
-          fake_server.start_with_query([AcceptTls], "?sslmode=verify-full")
+        let url = start_with_query([AcceptTls], "?sslmode=verify-full")
 
         // Act
         let connected = connect_url(url)
@@ -617,12 +616,12 @@ fn tls_tests(version: Int) {
     ),
     fake_url_case(
       "returns TlsRefused when the server does not offer TLS",
-      servers.url(version, servers.default_database) <> "?sslmode=require",
+      servers.url(version, default_database) <> "?sslmode=require",
       Error(TlsRefused),
     ),
     fake_url_case(
       "refuses another answer to the TLS request",
-      fake_server.start_with_query([AnswerSslRequest(88)], "?sslmode=require"),
+      start_with_query([AnswerSslRequest(88)], "?sslmode=require"),
       Error(ProtocolViolation("unexpected answer to the TLS request")),
     ),
   ])
@@ -635,13 +634,13 @@ fn query_case(name: String, answer: List(BitArray), expected) {
     // Arrange
     let steps =
       [ReceiveStartup, ..ready_steps()]
-      |> list.append([ReceiveMessage, ..list.map(answer, Send)])
-      |> list.append([Send(fake_server.ready())])
-    let assert Ok(connection) = connect_url(fake_server.start(steps))
+      |> append([ReceiveMessage, ..list.map(answer, Send)])
+      |> append([Send(ready())])
+    let assert Ok(connection) = connect_url(start(steps))
 
     // Act
-    let rows = wire.simple_query(connection, "select 1")
-    let _ = wire.close(connection)
+    let rows = simple_query(connection, "select 1")
+    let _ = close(connection)
 
     // Assert
     rows
@@ -656,18 +655,18 @@ fn describe_case(name: String, answer: List(BitArray), expected) {
     // Arrange
     let steps =
       [ReceiveStartup, ..ready_steps()]
-      |> list.append([
+      |> append([
         ReceiveMessage,
         ReceiveMessage,
         ReceiveMessage,
         ..list.map(answer, Send)
       ])
-      |> list.append([Send(fake_server.ready())])
-    let assert Ok(connection) = connect_url(fake_server.start(steps))
+      |> append([Send(ready())])
+    let assert Ok(connection) = connect_url(start(steps))
 
     // Act
     let described = wire.describe(connection, "select 1")
-    let _ = wire.close(connection)
+    let _ = close(connection)
 
     // Assert
     described
@@ -677,7 +676,7 @@ fn describe_case(name: String, answer: List(BitArray), expected) {
   })
 }
 
-fn malformed(name: String) -> wire.WireError {
+fn malformed(name: String) -> WireError {
   ProtocolViolation("malformed " <> name <> " message")
 }
 
@@ -687,20 +686,20 @@ fn malformed_message_tests() {
       // Arrange
       let steps =
         [ReceiveStartup, ..ready_steps()]
-        |> list.append([
+        |> append([
           ReceiveMessage,
-          Send(fake_server.message("D", <<>>)),
-          Send(fake_server.ready()),
+          Send(message("D", <<>>)),
+          Send(ready()),
           ReceiveMessage,
-          Send(fake_server.message("D", <<1:16, 1:32, "2":utf8>>)),
-          Send(fake_server.ready()),
+          Send(message("D", <<1:16, 1:32, "2":utf8>>)),
+          Send(ready()),
         ])
-      let assert Ok(connection) = connect_url(fake_server.start(steps))
+      let assert Ok(connection) = connect_url(start(steps))
 
       // Act
-      let first = wire.simple_query(connection, "select 1")
-      let second = wire.simple_query(connection, "select 2")
-      let _ = wire.close(connection)
+      let first = simple_query(connection, "select 1")
+      let second = simple_query(connection, "select 2")
+      let _ = close(connection)
 
       // Assert
       #(first, second)
@@ -710,57 +709,57 @@ fn malformed_message_tests() {
     }),
     query_case(
       "refuses an empty DataRow",
-      [fake_server.message("D", <<>>)],
+      [message("D", <<>>)],
       Error(malformed("DataRow")),
     ),
     query_case(
       "refuses a DataRow with fewer values than its count",
-      [fake_server.message("D", <<2:16, 1:32, "1":utf8>>)],
+      [message("D", <<2:16, 1:32, "1":utf8>>)],
       Error(malformed("DataRow")),
     ),
     query_case(
       "refuses a value that is not UTF-8",
-      [fake_server.message("D", <<1:16, 1:32, 255>>)],
+      [message("D", <<1:16, 1:32, 255>>)],
       Error(ProtocolViolation("a text value is not UTF-8")),
     ),
     query_case(
       "refuses an empty RowDescription",
-      [fake_server.message("T", <<>>)],
+      [message("T", <<>>)],
       Error(malformed("RowDescription")),
     ),
     query_case(
       "refuses a RowDescription without its field data",
-      [fake_server.message("T", <<1:16, "a":utf8, 0, 1:32>>)],
+      [message("T", <<1:16, "a":utf8, 0, 1:32>>)],
       Error(malformed("RowDescription")),
     ),
     query_case(
       "refuses a NoticeResponse field without its terminator",
-      [fake_server.message("N", <<"M":utf8, "x":utf8>>)],
+      [message("N", <<"M":utf8, "x":utf8>>)],
       Error(ProtocolViolation("a string has no terminator")),
     ),
     query_case(
       "returns the first error of a response",
       [
-        fake_server.message("E", <<"C":utf8, "1":utf8, 0, 0>>),
-        fake_server.message("E", <<"C":utf8, "2":utf8, 0, 0>>),
+        message("E", <<"C":utf8, "1":utf8, 0, 0>>),
+        message("E", <<"C":utf8, "2":utf8, 0, 0>>),
       ],
       Error(ServerError([#("C", "1")])),
     ),
     describe_case(
       "refuses an empty ParameterDescription",
-      [fake_server.message("t", <<>>)],
+      [message("t", <<>>)],
       Error(malformed("ParameterDescription")),
     ),
     describe_case(
       "refuses a ParameterDescription with fewer oids than its count",
-      [fake_server.message("t", <<2:16, 23:32>>)],
+      [message("t", <<2:16, 23:32>>)],
       Error(malformed("ParameterDescription")),
     ),
     describe_case(
       "returns the notices of Describe",
       [
-        fake_server.message("N", <<"M":utf8, "hello":utf8, 0, 0>>),
-        fake_server.message("n", <<>>),
+        message("N", <<"M":utf8, "hello":utf8, 0, 0>>),
+        message("n", <<>>),
       ],
       Ok(Description([], [], [Notice([#("M", "hello")])])),
     ),
@@ -769,13 +768,13 @@ fn malformed_message_tests() {
 
 // --- error_to_string -------------------------------------------------------
 
-fn text_case(error: wire.WireError, expected: String) {
-  it("describes " <> string.inspect(error), fn() {
+fn text_case(error: WireError, expected: String) {
+  it("describes " <> inspect(error), fn() {
     // Arrange
     let value = error
 
     // Act
-    let text = wire.error_to_string(value)
+    let text = error_to_string(value)
 
     // Assert
     text
@@ -814,7 +813,7 @@ fn error_to_string_tests() {
       "PostgreSQL asks for an authentication method that dream_model does not support: 7",
     ),
     text_case(
-      ScramFailed(scram.NonceMismatch),
+      ScramFailed(NonceMismatch),
       "the server nonce does not start with the client nonce, so the SCRAM exchange stopped",
     ),
     text_case(

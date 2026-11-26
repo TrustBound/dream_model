@@ -2,21 +2,29 @@
 //// messages and the row check. The attack tests check `analyze`.
 
 import dream_model/nullability.{
-  BrokenPromise, Column, ColumnCountMismatch, DatabaseFailed,
+  type AnalysisError, BrokenPromise, Column, ColumnCountMismatch, DatabaseFailed,
   HintNamesTableColumn, HintNamesUnknownColumn, HintNotNeeded, HintsRefused,
-  TreeFailed,
+  TreeFailed, analyze, broken_promise_to_string, check_row, error_to_string,
 }
-import dream_model/nullability/reason.{Computed, Table}
-import dream_model/postgres/tree
-import dream_model/postgres/wire
+import dream_model/nullability/reason.{
+  ColumnAllowsNull, Computed, CountAggregate, NotNullHint, NotNullInSchema,
+  Table,
+}
+import dream_model/postgres/tree.{TokenTooLong, VersionNotTested, VersionTooOld}
+import dream_model/postgres/wire.{
+  ConnectFailed, InvalidUrl, TlsRefused, get_parameter,
+}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import fixtures/fake_server.{ReceiveMessage, ReceiveStartup, Send}
-import fixtures/servers
+import fixtures/fake_server.{
+  type Step, ReceiveMessage, ReceiveStartup, Send, authentication_ok, message,
+  ready, start, start_for_connections,
+}
+import fixtures/servers.{default_database}
 import gleam/option.{None, Some}
-import gleam/result
-import gleam/string
+import gleam/result.{replace}
+import gleam/string.{inspect}
 
 pub fn tests(version: Int) -> TestSuite {
   describe("dream_model/nullability", [
@@ -26,16 +34,12 @@ pub fn tests(version: Int) -> TestSuite {
   ])
 }
 
-fn startup(server_version: String) -> List(fake_server.Step) {
+fn startup(server_version: String) -> List(Step) {
   [
     ReceiveStartup,
-    Send(fake_server.authentication_ok()),
-    Send(
-      fake_server.message("S", <<
-        "server_version":utf8, 0, server_version:utf8, 0,
-      >>),
-    ),
-    Send(fake_server.ready()),
+    Send(authentication_ok()),
+    Send(message("S", <<"server_version":utf8, 0, server_version:utf8, 0>>)),
+    Send(ready()),
   ]
 }
 
@@ -43,7 +47,7 @@ fn connect_tests(version: Int) {
   group("connect", [
     it("returns the version of the server", fn() {
       // Arrange
-      let url = servers.url(version, servers.default_database)
+      let url = servers.url(version, default_database)
 
       // Act
       let assert Ok(analyzer) = nullability.connect(url)
@@ -58,34 +62,32 @@ fn connect_tests(version: Int) {
     }),
     it("refuses PostgreSQL 15", fn() {
       // Arrange
-      let admin = servers.connect(15, servers.default_database)
-      let assert Ok(server_version) =
-        wire.get_parameter(admin, "server_version")
+      let admin = servers.connect(15, default_database)
+      let assert Ok(server_version) = get_parameter(admin, "server_version")
       let _ = wire.close(admin)
 
       // Act
-      let connected =
-        nullability.connect(servers.url(15, servers.default_database))
+      let connected = nullability.connect(servers.url(15, default_database))
 
       // Assert
       connected
-      |> result.replace(Nil)
+      |> replace(Nil)
       |> should
-      |> be_equal(Error(TreeFailed(tree.VersionTooOld(server_version))))
+      |> be_equal(Error(TreeFailed(VersionTooOld(server_version))))
       |> or_fail_with("Expected PostgreSQL 15 to be refused")
     }),
     it("refuses a version newer than the newest tested one", fn() {
       // Arrange
-      let url = fake_server.start(startup("20.0"))
+      let url = start(startup("20.0"))
 
       // Act
       let connected = nullability.connect(url)
 
       // Assert
       connected
-      |> result.replace(Nil)
+      |> replace(Nil)
       |> should
-      |> be_equal(Error(TreeFailed(tree.VersionNotTested("20.0"))))
+      |> be_equal(Error(TreeFailed(VersionNotTested("20.0"))))
       |> or_fail_with("Expected PostgreSQL 20 to be refused")
     }),
     it("returns DatabaseFailed for a URL that cannot be used", fn() {
@@ -97,11 +99,11 @@ fn connect_tests(version: Int) {
 
       // Assert
       connected
-      |> result.replace(Nil)
+      |> replace(Nil)
       |> should
       |> be_equal(
         Error(
-          DatabaseFailed(wire.InvalidUrl(
+          DatabaseFailed(InvalidUrl(
             "the scheme must be postgresql:// or postgres://",
           )),
         ),
@@ -117,25 +119,23 @@ fn connect_tests(version: Int) {
 
       // Assert
       connected
-      |> result.replace(Nil)
+      |> replace(Nil)
       |> should
       |> be_equal(
-        Error(
-          DatabaseFailed(wire.ConnectFailed("127.0.0.1", 1, "econnrefused")),
-        ),
+        Error(DatabaseFailed(ConnectFailed("127.0.0.1", 1, "econnrefused"))),
       )
       |> or_fail_with("Expected the connection to fail")
     }),
     it("returns DatabaseFailed when the second connection fails", fn() {
       // Arrange
-      let url = fake_server.start(startup("16.0"))
+      let url = start(startup("16.0"))
 
       // Act
       let connected = nullability.connect(url)
 
       // Assert
       case connected {
-        Error(DatabaseFailed(wire.ConnectFailed(..))) -> True
+        Error(DatabaseFailed(ConnectFailed(..))) -> True
         _ -> False
       }
       |> should
@@ -147,37 +147,37 @@ fn connect_tests(version: Int) {
       let tree_text =
         "({QUERY :commandType 1 :canSetTag true :rtable <> :targetList ({TARGETENTRY :expr {CONST :constisnull false} :resno 1 :resjunk false}) :returningList <>})"
       let row_description =
-        fake_server.message("T", <<
+        message("T", <<
           2:16, "a":utf8, 0, 0:32, 0:16, 23:32, 4:16, -1:32, 0:16, "b":utf8, 0,
           0:32, 0:16, 23:32, 4:16, -1:32, 0:16,
         >>)
       let url =
-        fake_server.start_for_connections([
+        start_for_connections([
           startup("16.0"),
           list_append(startup("16.0"), [
             ReceiveMessage,
             ReceiveMessage,
             ReceiveMessage,
             Send(
-              fake_server.message("N", <<
+              message("N", <<
                 "M":utf8, "rewritten parse tree:":utf8, 0, "D":utf8,
                 tree_text:utf8, 0, 0,
               >>),
             ),
-            Send(fake_server.message("t", <<0:16>>)),
+            Send(message("t", <<0:16>>)),
             Send(row_description),
-            Send(fake_server.ready()),
+            Send(ready()),
           ]),
         ])
       let assert Ok(analyzer) = nullability.connect(url)
 
       // Act
-      let analyzed = nullability.analyze(analyzer, "select 1 as a, 2 as b")
+      let analyzed = analyze(analyzer, "select 1 as a, 2 as b")
       let _ = nullability.close(analyzer)
 
       // Assert
       analyzed
-      |> result.replace(Nil)
+      |> replace(Nil)
       |> should
       |> be_equal(
         Error(ColumnCountMismatch(tree_columns: 1, described_columns: 2)),
@@ -195,7 +195,7 @@ fn list_append(first: List(a), second: List(a)) -> List(a) {
 }
 
 fn hinted_column() -> nullability.Column {
-  Column("n", 23, True, Computed, reason.NotNullHint)
+  Column("n", 23, True, Computed, NotNullHint)
 }
 
 fn check_row_tests() {
@@ -203,12 +203,12 @@ fn check_row_tests() {
     it("returns BrokenPromise for NULL in a hinted column", fn() {
       // Arrange
       let columns = [
-        Column("a", 23, False, Table, reason.ColumnAllowsNull),
+        Column("a", 23, False, Table, ColumnAllowsNull),
         hinted_column(),
       ]
 
       // Act
-      let checked = nullability.check_row(columns, "newest", [None, None])
+      let checked = check_row(columns, "newest", [None, None])
 
       // Assert
       checked
@@ -219,12 +219,12 @@ fn check_row_tests() {
     it("accepts NULL in a column without a hint", fn() {
       // Arrange
       let columns = [
-        Column("a", 23, False, Table, reason.ColumnAllowsNull),
+        Column("a", 23, False, Table, ColumnAllowsNull),
         hinted_column(),
       ]
 
       // Act
-      let checked = nullability.check_row(columns, "newest", [None, Some("1")])
+      let checked = check_row(columns, "newest", [None, Some("1")])
 
       // Assert
       checked
@@ -237,7 +237,7 @@ fn check_row_tests() {
       let promise = BrokenPromise("newest", "n")
 
       // Act
-      let text = nullability.broken_promise_to_string(promise)
+      let text = broken_promise_to_string(promise)
 
       // Assert
       text
@@ -250,13 +250,13 @@ fn check_row_tests() {
   ])
 }
 
-fn text_case(error: nullability.AnalysisError, expected: String) {
-  it("describes " <> string.inspect(error), fn() {
+fn text_case(error: AnalysisError, expected: String) {
+  it("describes " <> inspect(error), fn() {
     // Arrange
     let value = error
 
     // Act
-    let text = nullability.error_to_string(value)
+    let text = error_to_string(value)
 
     // Assert
     text
@@ -269,11 +269,11 @@ fn text_case(error: nullability.AnalysisError, expected: String) {
 fn error_to_string_tests() {
   group("error_to_string", [
     text_case(
-      DatabaseFailed(wire.TlsRefused),
+      DatabaseFailed(TlsRefused),
       "the URL asks for TLS (sslmode), and the PostgreSQL server does not offer it",
     ),
     text_case(
-      TreeFailed(tree.TokenTooLong),
+      TreeFailed(TokenTooLong),
       "the query has a name that is too long to read from PostgreSQL's analyzed query (77 bytes or more with its escapes); use a shorter name",
     ),
     text_case(
@@ -282,8 +282,8 @@ fn error_to_string_tests() {
     ),
     text_case(
       HintsRefused([
-        HintNamesTableColumn("email", reason.NotNullInSchema),
-        HintNotNeeded("n", reason.CountAggregate),
+        HintNamesTableColumn("email", NotNullInSchema),
+        HintNotNeeded("n", CountAggregate),
         HintNamesUnknownColumn("nope"),
       ]),
       "hint 'not null: email' names a table column; the schema decides it (NOT NULL in schema); hint 'not null: n' is not needed: the column is never NULL by rule (count(...) never returns NULL); remove the hint; hint names 'nope', which is not a result column",

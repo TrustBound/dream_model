@@ -1,18 +1,20 @@
 //// Tests for `dream_model/generator/gleam_type`, on the generator database.
 
 import dream_model/generator/gleam_type.{
-  BitArrayType, BoolType, DateType, FloatType, IntType, ListType, NumericType,
-  StringType, TimeOfDayType, TimestampType, TimestampWithTimeZoneType,
+  type GleamType, BitArrayType, BoolType, DateType, FloatType, IntType, ListType,
+  NumericType, StringType, TimeOfDayType, TimestampType,
+  TimestampWithTimeZoneType, decoder_text, empty_types, encode_call,
+  encoder_text, has_numeric, load, promised_list_text, resolve, type_text,
 }
-import dream_model/nullability
+import dream_model/nullability.{close, connect, execute}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import fixtures/model_database
-import gleam/int
-import gleam/list
+import fixtures/model_database.{url}
+import gleam/int.{parse}
+import gleam/list.{append, map}
 import gleam/option.{Some}
-import gleam/string
+import gleam/string.{inspect}
 
 pub fn tests(version: Int) -> TestSuite {
   describe("dream_model/generator/gleam_type", [
@@ -22,19 +24,16 @@ pub fn tests(version: Int) -> TestSuite {
 }
 
 /// Resolves the type that a SQL type name names, as `regtype` reads it.
-fn resolve_named(
-  version: Int,
-  type_name: String,
-) -> Result(gleam_type.GleamType, String) {
-  let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+fn resolve_named(version: Int, type_name: String) -> Result(GleamType, String) {
+  let assert Ok(analyzer) = connect(url(version))
   let assert Ok([[Some(oid)]]) =
-    nullability.execute(analyzer, "select $1::text::regtype::oid::text", [
+    execute(analyzer, "select $1::text::regtype::oid::text", [
       Some(type_name),
     ])
-  let assert Ok(oid) = int.parse(oid)
-  let assert Ok(types) = gleam_type.load(analyzer, [oid])
-  let _ = nullability.close(analyzer)
-  gleam_type.resolve(types, oid)
+  let assert Ok(oid) = parse(oid)
+  let assert Ok(types) = load(analyzer, [oid])
+  let _ = close(analyzer)
+  resolve(types, oid)
 }
 
 fn resolve_tests(version: Int) {
@@ -73,9 +72,9 @@ fn resolve_tests(version: Int) {
   ]
   group(
     "resolve",
-    list.map(cases, fn(example) {
+    map(cases, fn(example) {
       let #(type_name, expected) = example
-      it("resolves " <> type_name <> " to " <> string.inspect(expected), fn() {
+      it("resolves " <> type_name <> " to " <> inspect(expected), fn() {
         // Act
         let found = resolve_named(version, type_name)
 
@@ -83,13 +82,13 @@ fn resolve_tests(version: Int) {
         found
         |> should
         |> be_equal(expected)
-        |> or_fail_with("Expected " <> string.inspect(expected))
+        |> or_fail_with("Expected " <> inspect(expected))
       })
     })
-      |> list.append([
+      |> append([
         it("refuses a type that load did not read", fn() {
           // Act
-          let found = gleam_type.resolve(gleam_type.empty_types(), 999_999)
+          let found = resolve(empty_types(), 999_999)
 
           // Assert
           found
@@ -118,7 +117,7 @@ fn text_tests() {
   group("texts", [
     it("type_text writes every type", fn() {
       // Act
-      let texts = list.map(every_type, gleam_type.type_text)
+      let texts = map(every_type, type_text)
 
       // Assert
       texts
@@ -132,7 +131,7 @@ fn text_tests() {
     }),
     it("decoder_text writes every decoder", fn() {
       // Act
-      let texts = list.map(every_type, gleam_type.decoder_text(_, "\"day\""))
+      let texts = map(every_type, decoder_text(_, "\"day\""))
 
       // Assert
       texts
@@ -150,7 +149,7 @@ fn text_tests() {
     }),
     it("encoder_text writes every value function", fn() {
       // Act
-      let texts = list.map(every_type, gleam_type.encoder_text)
+      let texts = map(every_type, encoder_text)
 
       // Assert
       texts
@@ -165,7 +164,7 @@ fn text_tests() {
     }),
     it("encode_call calls the value function", fn() {
       // Act
-      let text = gleam_type.encode_call(IntType, "id", False)
+      let text = encode_call(IntType, "id", False)
 
       // Assert
       text
@@ -175,7 +174,7 @@ fn text_tests() {
     }),
     it("encode_call sends a list with client.array", fn() {
       // Act
-      let text = gleam_type.encode_call(ListType(IntType), "ids", False)
+      let text = encode_call(ListType(IntType), "ids", False)
 
       // Assert
       text
@@ -185,7 +184,7 @@ fn text_tests() {
     }),
     it("encode_call sends an optional list with client.nullable", fn() {
       // Act
-      let text = gleam_type.encode_call(ListType(IntType), "ids", True)
+      let text = encode_call(ListType(IntType), "ids", True)
 
       // Assert
       text
@@ -197,7 +196,7 @@ fn text_tests() {
     }),
     it("encode_call sends a numeric as text", fn() {
       // Act
-      let text = gleam_type.encode_call(NumericType, "amount", False)
+      let text = encode_call(NumericType, "amount", False)
 
       // Assert
       text
@@ -207,7 +206,7 @@ fn text_tests() {
     }),
     it("encode_call sends an optional numeric with client.nullable", fn() {
       // Act
-      let text = gleam_type.encode_call(NumericType, "amount", True)
+      let text = encode_call(NumericType, "amount", True)
 
       // Assert
       text
@@ -217,7 +216,7 @@ fn text_tests() {
     }),
     it("promised_list_text writes a list without Option elements", fn() {
       // Act
-      let text = gleam_type.promised_list_text(NumericType)
+      let text = promised_list_text(NumericType)
 
       // Assert
       text
@@ -228,7 +227,7 @@ fn text_tests() {
     it("has_numeric finds a numeric in each type", fn() {
       // Act
       let found =
-        list.map(
+        map(
           [
             NumericType,
             ListType(NumericType),
@@ -237,7 +236,7 @@ fn text_tests() {
             ListType(IntType),
             StringType,
           ],
-          gleam_type.has_numeric,
+          has_numeric,
         )
 
       // Assert

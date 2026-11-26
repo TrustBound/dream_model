@@ -5,14 +5,18 @@
 //// uses, and for every child table and partition of those relations. The
 //// NULL rules then read them with the `get_` functions and run no SQL.
 
-import dream_model/postgres/wire
-import gleam/dict.{type Dict}
-import gleam/int
-import gleam/list
-import gleam/option.{type Option, Some}
-import gleam/result
-import gleam/set
-import gleam/string
+import dream_model/postgres/wire.{
+  type Connection, type WireError, ProtocolViolation, execute,
+}
+import gleam/dict.{type Dict, get, has_key, insert, values}
+import gleam/int.{parse, to_string}
+import gleam/list.{
+  append, drop, filter, filter_map, find, flat_map, fold, try_map, unique,
+}
+import gleam/option.{type Option, Some, to_result}
+import gleam/result.{replace_error, try}
+import gleam/set.{from_list, to_list}
+import gleam/string.{join}
 
 /// A column of a table, view or other relation.
 pub type Attribute {
@@ -116,29 +120,29 @@ pub fn version(catalog: Catalog) -> Int {
 /// type.
 pub fn load(
   catalog: Catalog,
-  connection: wire.Connection,
+  connection: Connection,
   relation_oids: List(Int),
   function_oids: List(Int),
   type_oids: List(Int),
-) -> Result(Catalog, wire.WireError) {
-  use catalog <- result.try(load_relations(catalog, connection, relation_oids))
-  use catalog <- result.try(load_domains(catalog, connection, type_oids))
+) -> Result(Catalog, WireError) {
+  use catalog <- try(load_relations(catalog, connection, relation_oids))
+  use catalog <- try(load_domains(catalog, connection, type_oids))
   load_functions(catalog, connection, function_oids)
 }
 
 /// Returns the facts of a relation.
 pub fn get_relation(catalog: Catalog, oid: Int) -> Result(Relation, Nil) {
-  dict.get(catalog.relations, oid)
+  get(catalog.relations, oid)
 }
 
 /// Returns the facts of a domain type.
 pub fn get_domain(catalog: Catalog, type_oid: Int) -> Result(Domain, Nil) {
-  dict.get(catalog.domains, type_oid)
+  get(catalog.domains, type_oid)
 }
 
 /// Returns the name and schema of a function.
 pub fn get_function(catalog: Catalog, oid: Int) -> Result(Function, Nil) {
-  dict.get(catalog.functions, oid)
+  get(catalog.functions, oid)
 }
 
 /// Returns a column of a relation by its number.
@@ -146,7 +150,7 @@ pub fn get_attribute(
   relation: Relation,
   number: Int,
 ) -> Result(Attribute, Nil) {
-  list.find(relation.attributes, fn(attribute) { attribute.number == number })
+  find(relation.attributes, fn(attribute) { attribute.number == number })
 }
 
 /// Returns a column of a relation by its name.
@@ -154,7 +158,7 @@ pub fn get_attribute_by_name(
   relation: Relation,
   name: String,
 ) -> Result(Attribute, Nil) {
-  list.find(relation.attributes, fn(attribute) { attribute.name == name })
+  find(relation.attributes, fn(attribute) { attribute.name == name })
 }
 
 // --- Relations -------------------------------------------------------------
@@ -218,84 +222,83 @@ where c.conrelid = any($1::oid[]) and c.contype = 'n' and not c.convalidated"
 
 fn load_relations(
   catalog: Catalog,
-  connection: wire.Connection,
+  connection: Connection,
   oids: List(Int),
-) -> Result(Catalog, wire.WireError) {
-  let missing =
-    list.filter(oids, fn(oid) { !dict.has_key(catalog.relations, oid) })
-  use family_rows <- result.try(query_by_oids(connection, family_sql, missing))
-  use family <- result.try(decode_rows(family_rows, decode_pair_of_integers))
+) -> Result(Catalog, WireError) {
+  let missing = filter(oids, fn(oid) { !has_key(catalog.relations, oid) })
+  use family_rows <- try(query_by_oids(connection, family_sql, missing))
+  use family <- try(decode_rows(family_rows, decode_pair_of_integers))
   let new =
     list.map(family, fn(pair) { pair.1 })
-    |> list.filter(fn(oid) { !dict.has_key(catalog.relations, oid) })
-    |> list.unique
-  use pairs <- result.try(
+    |> filter(fn(oid) { !has_key(catalog.relations, oid) })
+    |> unique
+  use pairs <- try(
     query_by_oids(connection, family_sql, new)
-    |> result.try(decode_rows(_, decode_pair_of_integers)),
+    |> try(decode_rows(_, decode_pair_of_integers)),
   )
-  use relations <- result.try(
+  use relations <- try(
     query_by_oids(connection, relations_sql, new)
-    |> result.try(decode_rows(_, decode_relation_row)),
+    |> try(decode_rows(_, decode_relation_row)),
   )
-  use attributes <- result.try(
+  use attributes <- try(
     query_by_oids(connection, attributes_sql, new)
-    |> result.try(decode_rows(_, decode_attribute_row)),
+    |> try(decode_rows(_, decode_attribute_row)),
   )
-  use checks <- result.try(
+  use checks <- try(
     query_by_oids(connection, checks_sql, new)
-    |> result.try(decode_rows(_, decode_pair_of_integers)),
+    |> try(decode_rows(_, decode_pair_of_integers)),
   )
-  use partition_keys <- result.try(
+  use partition_keys <- try(
     query_by_oids(connection, partition_keys_sql, new)
-    |> result.try(decode_rows(_, decode_pair_of_integers)),
+    |> try(decode_rows(_, decode_pair_of_integers)),
   )
-  use generated_sources <- result.try(
+  use generated_sources <- try(
     query_by_oids(connection, generated_sources_sql, new)
-    |> result.try(decode_rows(_, decode_pair_of_integers)),
+    |> try(decode_rows(_, decode_pair_of_integers)),
   )
-  use not_valid <- result.try(load_not_valid(catalog, connection, new))
+  use not_valid <- try(load_not_valid(catalog, connection, new))
   let relations =
-    list.fold(relations, catalog.relations, fn(relations, row) {
+    fold(relations, catalog.relations, fn(relations, row) {
       let #(oid, kind, has_before_trigger, has_row_security, name) = row
       let relation =
         Relation(
           name:,
           kind:,
-          attributes: list.filter_map(attributes, fn(attribute) {
+          attributes: filter_map(attributes, fn(attribute) {
             case attribute.0 == oid {
               True -> Ok(attribute.1)
               False -> Error(Nil)
             }
           }),
           descendants: values_for(pairs, oid)
-            |> list.filter(fn(descendant) { descendant != oid }),
+            |> filter(fn(descendant) { descendant != oid }),
           check_columns: values_for(checks, oid),
           partition_key_columns: values_for(partition_keys, oid),
-          generated_sources: values_for(generated_sources, oid) |> list.unique,
+          generated_sources: values_for(generated_sources, oid) |> unique,
           not_valid_not_null: values_for(not_valid, oid),
           has_before_trigger:,
           has_row_security:,
         )
-      dict.insert(relations, oid, relation)
+      insert(relations, oid, relation)
     })
   Ok(Catalog(..catalog, relations:))
 }
 
 fn load_not_valid(
   catalog: Catalog,
-  connection: wire.Connection,
+  connection: Connection,
   oids: List(Int),
-) -> Result(List(#(Int, String)), wire.WireError) {
+) -> Result(List(#(Int, String)), WireError) {
   case catalog.version >= 18 {
     False -> Ok([])
     True ->
       query_by_oids(connection, not_valid_sql, oids)
-      |> result.try(decode_rows(_, decode_integer_and_text))
+      |> try(decode_rows(_, decode_integer_and_text))
   }
 }
 
 fn values_for(pairs: List(#(Int, a)), key: Int) -> List(a) {
-  list.filter_map(pairs, fn(pair) {
+  filter_map(pairs, fn(pair) {
     case pair.0 == key {
       True -> Ok(pair.1)
       False -> Error(Nil)
@@ -319,24 +322,24 @@ from chain c group by c.root"
 
 fn load_domains(
   catalog: Catalog,
-  connection: wire.Connection,
+  connection: Connection,
   type_oids: List(Int),
-) -> Result(Catalog, wire.WireError) {
+) -> Result(Catalog, WireError) {
   let missing =
-    dict.values(catalog.relations)
-    |> list.flat_map(fn(relation) { relation.attributes })
-    |> list.filter(fn(attribute) { attribute.has_domain_type })
+    values(catalog.relations)
+    |> flat_map(fn(relation) { relation.attributes })
+    |> filter(fn(attribute) { attribute.has_domain_type })
     |> list.map(fn(attribute) { attribute.type_oid })
-    |> list.append(type_oids)
-    |> list.filter(fn(oid) { !dict.has_key(catalog.domains, oid) })
-    |> list.unique
-  use rows <- result.try(
+    |> append(type_oids)
+    |> filter(fn(oid) { !has_key(catalog.domains, oid) })
+    |> unique
+  use rows <- try(
     query_by_oids(connection, domains_sql, missing)
-    |> result.try(decode_rows(_, decode_domain_row)),
+    |> try(decode_rows(_, decode_domain_row)),
   )
   let domains =
-    list.fold(rows, catalog.domains, fn(domains, row) {
-      dict.insert(domains, row.0, row.1)
+    fold(rows, catalog.domains, fn(domains, row) {
+      insert(domains, row.0, row.1)
     })
   Ok(Catalog(..catalog, domains:))
 }
@@ -354,18 +357,17 @@ where p.oid = any($1::oid[])"
 
 fn load_functions(
   catalog: Catalog,
-  connection: wire.Connection,
+  connection: Connection,
   oids: List(Int),
-) -> Result(Catalog, wire.WireError) {
-  let missing =
-    list.filter(oids, fn(oid) { !dict.has_key(catalog.functions, oid) })
-  use rows <- result.try(
+) -> Result(Catalog, WireError) {
+  let missing = filter(oids, fn(oid) { !has_key(catalog.functions, oid) })
+  use rows <- try(
     query_by_oids(connection, functions_sql, missing)
-    |> result.try(decode_rows(_, decode_function_row)),
+    |> try(decode_rows(_, decode_function_row)),
   )
   let functions =
-    list.fold(rows, catalog.functions, fn(functions, row) {
-      dict.insert(functions, row.0, row.1)
+    fold(rows, catalog.functions, fn(functions, row) {
+      insert(functions, row.0, row.1)
     })
   Ok(Catalog(..catalog, functions:))
 }
@@ -375,21 +377,16 @@ fn load_functions(
 /// Runs a catalog query with one parameter, an array of oids. Runs nothing
 /// for an empty list.
 fn query_by_oids(
-  connection: wire.Connection,
+  connection: Connection,
   sql: String,
   oids: List(Int),
-) -> Result(List(List(Option(String))), wire.WireError) {
+) -> Result(List(List(Option(String))), WireError) {
   case oids {
     [] -> Ok([])
     _ -> {
       let array =
-        "{"
-        <> string.join(
-          list.map(set.to_list(set.from_list(oids)), int.to_string),
-          ",",
-        )
-        <> "}"
-      wire.execute(connection, sql, [Some(array)])
+        "{" <> join(list.map(to_list(from_list(oids)), to_string), ",") <> "}"
+      execute(connection, sql, [Some(array)])
     }
   }
 }
@@ -397,9 +394,9 @@ fn query_by_oids(
 fn decode_rows(
   rows: List(List(Option(String))),
   decoder: fn(List(Option(String))) -> Result(a, Nil),
-) -> Result(List(a), wire.WireError) {
-  list.try_map(rows, decoder)
-  |> result.replace_error(wire.ProtocolViolation(
+) -> Result(List(a), WireError) {
+  try_map(rows, decoder)
+  |> replace_error(ProtocolViolation(
     "a catalog query returned an unexpected row",
   ))
 }
@@ -407,39 +404,39 @@ fn decode_rows(
 fn decode_pair_of_integers(
   row: List(Option(String)),
 ) -> Result(#(Int, Int), Nil) {
-  use first <- result.try(get_integer(row, 0))
-  use second <- result.try(get_integer(row, 1))
+  use first <- try(get_integer(row, 0))
+  use second <- try(get_integer(row, 1))
   Ok(#(first, second))
 }
 
 fn decode_integer_and_text(
   row: List(Option(String)),
 ) -> Result(#(Int, String), Nil) {
-  use first <- result.try(get_integer(row, 0))
-  use second <- result.try(get_text(row, 1))
+  use first <- try(get_integer(row, 0))
+  use second <- try(get_text(row, 1))
   Ok(#(first, second))
 }
 
 fn decode_relation_row(
   row: List(Option(String)),
 ) -> Result(#(Int, String, Bool, Bool, String), Nil) {
-  use oid <- result.try(get_integer(row, 0))
-  use kind <- result.try(get_text(row, 1))
-  use has_before_trigger <- result.try(get_boolean(row, 2))
-  use has_row_security <- result.try(get_boolean(row, 3))
-  use name <- result.try(get_text(row, 4))
+  use oid <- try(get_integer(row, 0))
+  use kind <- try(get_text(row, 1))
+  use has_before_trigger <- try(get_boolean(row, 2))
+  use has_row_security <- try(get_boolean(row, 3))
+  use name <- try(get_text(row, 4))
   Ok(#(oid, kind, has_before_trigger, has_row_security, name))
 }
 
 fn decode_attribute_row(
   row: List(Option(String)),
 ) -> Result(#(Int, Attribute), Nil) {
-  use relation <- result.try(get_integer(row, 0))
-  use number <- result.try(get_integer(row, 1))
-  use name <- result.try(get_text(row, 2))
-  use not_null <- result.try(get_boolean(row, 3))
-  use type_oid <- result.try(get_integer(row, 4))
-  use has_domain_type <- result.try(get_boolean(row, 5))
+  use relation <- try(get_integer(row, 0))
+  use number <- try(get_integer(row, 1))
+  use name <- try(get_text(row, 2))
+  use not_null <- try(get_boolean(row, 3))
+  use type_oid <- try(get_integer(row, 4))
+  use has_domain_type <- try(get_boolean(row, 5))
   Ok(#(
     relation,
     Attribute(number:, name:, not_null:, type_oid:, has_domain_type:),
@@ -447,31 +444,31 @@ fn decode_attribute_row(
 }
 
 fn decode_domain_row(row: List(Option(String))) -> Result(#(Int, Domain), Nil) {
-  use oid <- result.try(get_integer(row, 0))
-  use not_null <- result.try(get_boolean(row, 1))
-  use has_check <- result.try(get_boolean(row, 2))
+  use oid <- try(get_integer(row, 0))
+  use not_null <- try(get_boolean(row, 1))
+  use has_check <- try(get_boolean(row, 2))
   Ok(#(oid, Domain(not_null:, has_check:)))
 }
 
 fn decode_function_row(
   row: List(Option(String)),
 ) -> Result(#(Int, Function), Nil) {
-  use oid <- result.try(get_integer(row, 0))
-  use name <- result.try(get_text(row, 1))
-  use schema <- result.try(get_text(row, 2))
-  use is_length_coercion <- result.try(get_boolean(row, 3))
+  use oid <- try(get_integer(row, 0))
+  use name <- try(get_text(row, 1))
+  use schema <- try(get_text(row, 2))
+  use is_length_coercion <- try(get_boolean(row, 3))
   Ok(#(oid, Function(name:, schema:, is_length_coercion:)))
 }
 
 fn get_text(row: List(Option(String)), index: Int) -> Result(String, Nil) {
-  list.drop(row, index)
+  drop(row, index)
   |> list.first
-  |> result.try(option.to_result(_, Nil))
+  |> try(to_result(_, Nil))
 }
 
 fn get_integer(row: List(Option(String)), index: Int) -> Result(Int, Nil) {
   get_text(row, index)
-  |> result.try(int.parse)
+  |> try(parse)
 }
 
 fn get_boolean(row: List(Option(String)), index: Int) -> Result(Bool, Nil) {

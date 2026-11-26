@@ -31,13 +31,13 @@
 //// cannot hold: the decoder fails such a value with a message that names
 //// the column.
 
-import dream_model/nullability.{type AnalysisError, type Analyzer}
-import gleam/dict.{type Dict}
-import gleam/int
-import gleam/list
-import gleam/option.{type Option, Some}
-import gleam/result
-import gleam/string
+import dream_model/nullability.{type AnalysisError, type Analyzer, execute}
+import gleam/dict.{type Dict, from_list, get, new}
+import gleam/int.{parse, to_string}
+import gleam/list.{contains, drop, filter_map, find, first, unique}
+import gleam/option.{type Option, Some, to_result}
+import gleam/result.{replace_error, try}
+import gleam/string.{join}
 
 /// A Gleam type of a column or a parameter.
 pub type GleamType {
@@ -104,7 +104,7 @@ const bit_array_names = ["bytea", "uuid"]
 
 /// Returns no type facts.
 pub fn empty_types() -> Types {
-  dict.new()
+  new()
 }
 
 /// Reads the facts of the types and of their element and base types.
@@ -112,21 +112,18 @@ pub fn load(
   analyzer: Analyzer,
   oids: List(Int),
 ) -> Result(Types, AnalysisError) {
-  let array =
-    "{" <> string.join(list.map(list.unique(oids), int.to_string), ",") <> "}"
-  use rows <- result.map(
-    nullability.execute(analyzer, types_sql, [Some(array)]),
-  )
-  list.filter_map(rows, decode_row)
-  |> dict.from_list
+  let array = "{" <> join(list.map(unique(oids), to_string), ",") <> "}"
+  use rows <- result.map(execute(analyzer, types_sql, [Some(array)]))
+  filter_map(rows, decode_row)
+  |> from_list
 }
 
 /// Returns the Gleam type of a PostgreSQL type, or the name of the type
 /// when it is not supported.
 pub fn resolve(types: Types, oid: Int) -> Result(GleamType, String) {
-  use facts <- result.try(
-    dict.get(types, oid)
-    |> result.replace_error("the type with oid " <> int.to_string(oid)),
+  use facts <- try(
+    get(types, oid)
+    |> replace_error("the type with oid " <> to_string(oid)),
   )
   let is_array = facts.category == "A" && facts.element != 0
   case facts.kind, is_array {
@@ -135,7 +132,7 @@ pub fn resolve(types: Types, oid: Int) -> Result(GleamType, String) {
     _, True ->
       resolve(types, facts.element)
       |> result.map(ListType)
-      |> result.replace_error(facts.display_name)
+      |> replace_error(facts.display_name)
     _, False -> resolve_base(facts)
   }
 }
@@ -144,21 +141,21 @@ fn resolve_base(facts: TypeFacts) -> Result(GleamType, String) {
   let name = facts.name
   let in_catalog = facts.schema == "pg_catalog"
   let found = [
-    #(in_catalog && list.contains(integer_names, name), IntType),
-    #(in_catalog && list.contains(float_names, name), FloatType),
+    #(in_catalog && contains(integer_names, name), IntType),
+    #(in_catalog && contains(float_names, name), FloatType),
     #(in_catalog && name == "numeric", NumericType),
-    #(in_catalog && list.contains(string_names, name), StringType),
+    #(in_catalog && contains(string_names, name), StringType),
     #(name == "citext", StringType),
     #(in_catalog && name == "bool", BoolType),
-    #(in_catalog && list.contains(bit_array_names, name), BitArrayType),
+    #(in_catalog && contains(bit_array_names, name), BitArrayType),
     #(in_catalog && name == "timestamp", TimestampType),
     #(in_catalog && name == "timestamptz", TimestampWithTimeZoneType),
     #(in_catalog && name == "date", DateType),
     #(in_catalog && name == "time", TimeOfDayType),
   ]
-  list.find(found, fn(pair) { pair.0 })
+  find(found, fn(pair) { pair.0 })
   |> result.map(fn(pair) { pair.1 })
-  |> result.replace_error(facts.display_name)
+  |> replace_error(facts.display_name)
 }
 
 /// Returns the type as generated code writes it, for example
@@ -280,13 +277,13 @@ fn element_encoder_text(element: GleamType) -> String {
 }
 
 fn decode_row(row: List(Option(String))) -> Result(#(Int, TypeFacts), Nil) {
-  use oid <- result.try(get_integer(row, 0))
-  use name <- result.try(get_text(row, 1))
-  use schema <- result.try(get_text(row, 2))
-  use kind <- result.try(get_text(row, 3))
-  use category <- result.try(get_text(row, 4))
-  use element <- result.try(get_integer(row, 5))
-  use base <- result.try(get_integer(row, 6))
+  use oid <- try(get_integer(row, 0))
+  use name <- try(get_text(row, 1))
+  use schema <- try(get_text(row, 2))
+  use kind <- try(get_text(row, 3))
+  use category <- try(get_text(row, 4))
+  use element <- try(get_integer(row, 5))
+  use base <- try(get_integer(row, 6))
   use display_name <- result.map(get_text(row, 7))
   #(
     oid,
@@ -295,12 +292,12 @@ fn decode_row(row: List(Option(String))) -> Result(#(Int, TypeFacts), Nil) {
 }
 
 fn get_text(row: List(Option(String)), index: Int) -> Result(String, Nil) {
-  list.drop(row, index)
-  |> list.first
-  |> result.try(option.to_result(_, Nil))
+  drop(row, index)
+  |> first
+  |> try(to_result(_, Nil))
 }
 
 fn get_integer(row: List(Option(String)), index: Int) -> Result(Int, Nil) {
   get_text(row, index)
-  |> result.try(int.parse)
+  |> try(parse)
 }

@@ -5,13 +5,17 @@
 //// a LOG notice. `capture` parses and describes the statement on such a
 //// connection, and reads the tree from that notice.
 
-import dream_model/postgres/node.{type Node}
-import dream_model/postgres/wire
-import gleam/bit_array
-import gleam/int
-import gleam/list
-import gleam/result
-import gleam/string
+import dream_model/postgres/node.{
+  type Node, type ParseError, items, parse_error_to_string,
+}
+import dream_model/postgres/wire.{
+  type Connection, type Description, type Notice, type WireError, describe,
+}
+import gleam/bit_array.{from_string}
+import gleam/int.{max, to_string}
+import gleam/list.{filter, filter_map, last, length, take_while}
+import gleam/result.{is_ok, map_error, replace_error, try}
+import gleam/string.{concat, to_graphemes}
 
 /// The startup `options` of a connection that sends the rewritten query
 /// tree of each statement as a LOG notice.
@@ -28,7 +32,7 @@ pub const newest_version = 19
 pub type Captured {
   Captured(
     query: Node,
-    description: wire.Description,
+    description: Description,
     /// The number of queries that rewriting gave. It is more than 1 when a
     /// rule adds queries, for example a `DO ALSO` rule. The other queries
     /// run too, and can use each parameter anywhere.
@@ -45,7 +49,7 @@ pub type TreeError {
   /// The `server_version` parameter does not start with a number.
   UnknownVersion(version: String)
   /// PostgreSQL did not accept the statement, or the connection failed.
-  QueryFailed(error: wire.WireError)
+  QueryFailed(error: WireError)
   /// The connection did not get the notice with the query tree. It was not
   /// opened with `tree_options`.
   NoTreeNotice
@@ -54,7 +58,7 @@ pub type TreeError {
   /// puts a line break inside the token.
   TokenTooLong
   /// The notice text is not valid node text.
-  UnreadableTree(error: node.ParseError)
+  UnreadableTree(error: ParseError)
   /// Rewriting gave `queries` queries, and `main` of them return the
   /// statement's result. dream_model needs exactly one.
   WrongQueryCount(queries: Int, main: Int)
@@ -65,11 +69,11 @@ pub type TreeError {
 /// dream_model supports it.
 pub fn check_version(server_version: String) -> Result(Int, TreeError) {
   let digits =
-    string.to_graphemes(server_version)
-    |> list.take_while(fn(character) { result.is_ok(int.parse(character)) })
-    |> string.concat
-  use major <- result.try(
-    int.parse(digits) |> result.replace_error(UnknownVersion(server_version)),
+    to_graphemes(server_version)
+    |> take_while(fn(character) { is_ok(int.parse(character)) })
+    |> concat
+  use major <- try(
+    int.parse(digits) |> replace_error(UnknownVersion(server_version)),
   )
   case major < oldest_version, major > newest_version {
     True, _ -> Error(VersionTooOld(server_version))
@@ -82,23 +86,21 @@ pub fn check_version(server_version: String) -> Result(Int, TreeError) {
 /// and returns the one rewritten query that returns the statement's
 /// result.
 pub fn capture(
-  connection: wire.Connection,
+  connection: Connection,
   sql: String,
 ) -> Result(Captured, TreeError) {
-  use description <- result.try(
-    wire.describe(connection, sql) |> result.map_error(QueryFailed),
-  )
-  use text <- result.try(find_tree_text(description.notices))
-  use Nil <- result.try(check_token_lengths(text))
-  use parsed <- result.try(node.parse(text) |> result.map_error(UnreadableTree))
-  let queries = node.items(parsed)
+  use description <- try(describe(connection, sql) |> map_error(QueryFailed))
+  use text <- try(find_tree_text(description.notices))
+  use Nil <- try(check_token_lengths(text))
+  use parsed <- try(node.parse(text) |> map_error(UnreadableTree))
+  let queries = items(parsed)
   let main =
-    list.filter(queries, fn(query) {
+    filter(queries, fn(query) {
       node.text(node.get_field(query, "canSetTag")) == "true"
     })
   case main {
-    [query] -> Ok(Captured(query:, description:, queries: list.length(queries)))
-    _ -> Error(WrongQueryCount(list.length(queries), list.length(main)))
+    [query] -> Ok(Captured(query:, description:, queries: length(queries)))
+    _ -> Error(WrongQueryCount(length(queries), length(main)))
   }
 }
 
@@ -109,15 +111,15 @@ pub fn error_to_string(error: TreeError) -> String {
       "PostgreSQL "
       <> version
       <> " is not supported: dream_model needs PostgreSQL "
-      <> int.to_string(oldest_version)
+      <> to_string(oldest_version)
       <> " or newer, because older versions do not record which columns an outer join can make NULL"
     VersionNotTested(version) ->
       "PostgreSQL "
       <> version
       <> " is not supported yet: dream_model is tested on PostgreSQL "
-      <> int.to_string(oldest_version)
+      <> to_string(oldest_version)
       <> " to "
-      <> int.to_string(newest_version)
+      <> to_string(newest_version)
       <> ", and it reads PostgreSQL's analyzed query, whose form can change in each major version"
     UnknownVersion(version) ->
       "cannot read the PostgreSQL version from \"" <> version <> "\""
@@ -129,26 +131,26 @@ pub fn error_to_string(error: TreeError) -> String {
       "the query has a name that is too long to read from PostgreSQL's analyzed query (77 bytes or more with its escapes); use a shorter name"
     UnreadableTree(error) ->
       "cannot read PostgreSQL's analyzed query: "
-      <> node.parse_error_to_string(error)
+      <> parse_error_to_string(error)
     WrongQueryCount(queries, main) ->
       "rewriting gave "
-      <> int.to_string(queries)
+      <> to_string(queries)
       <> " queries, and "
-      <> int.to_string(main)
+      <> to_string(main)
       <> " of them return the result; dream_model needs exactly one (rules can cause this)"
   }
 }
 
-fn find_tree_text(notices: List(wire.Notice)) -> Result(String, TreeError) {
+fn find_tree_text(notices: List(Notice)) -> Result(String, TreeError) {
   notices
-  |> list.filter_map(fn(notice) {
+  |> filter_map(fn(notice) {
     case wire.get_field(notice.fields, "M") {
       Ok("rewritten parse tree" <> _) -> wire.get_field(notice.fields, "D")
       _ -> Error(Nil)
     }
   })
-  |> list.last
-  |> result.replace_error(NoTreeNotice)
+  |> last
+  |> replace_error(NoTreeNotice)
 }
 
 /// PostgreSQL's `format_node_dump` breaks the tree text into lines of at
@@ -157,7 +159,7 @@ fn find_tree_text(notices: List(wire.Notice)) -> Result(String, TreeError) {
 /// break inside it, which changes the token. This refuses any run of 77
 /// bytes or more without a space or a line break.
 fn check_token_lengths(text: String) -> Result(Nil, TreeError) {
-  case longest_run(bit_array.from_string(text), 0, 0) >= 77 {
+  case longest_run(from_string(text), 0, 0) >= 77 {
     True -> Error(TokenTooLong)
     False -> Ok(Nil)
   }
@@ -168,7 +170,7 @@ fn longest_run(bytes: BitArray, current: Int, longest: Int) -> Int {
     <<32, rest:bytes>> | <<10, rest:bytes>> | <<9, rest:bytes>> ->
       longest_run(rest, 0, longest)
     <<_, rest:bytes>> ->
-      longest_run(rest, current + 1, int.max(longest, current + 1))
+      longest_run(rest, current + 1, max(longest, current + 1))
     _ -> longest
   }
 }

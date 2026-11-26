@@ -1,6 +1,6 @@
 //// Tests for `dream_model/nullability/hint`.
 
-import dream_model/nullability/hint.{Hints}
+import dream_model/nullability/hint.{Hints, is_optional_parameter, parse_hints}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -14,7 +14,7 @@ pub fn tests() -> TestSuite {
         let sql = "-- just a comment\nselect 1"
 
         // Act
-        let hints = hint.parse_hints(sql)
+        let hints = parse_hints(sql)
 
         // Assert
         hints
@@ -28,7 +28,7 @@ pub fn tests() -> TestSuite {
           "  --NOT NULL: a, b\n-- not null : b,,c\n-- Nullable: d\n-- params: x, y?\n-- other: z\nselect 1"
 
         // Act
-        let hints = hint.parse_hints(sql)
+        let hints = parse_hints(sql)
 
         // Assert
         hints
@@ -46,7 +46,7 @@ pub fn tests() -> TestSuite {
           "-- not null: a\n\n-- nullable: b\nselect a, b\n-- params: id?\n-- nullable: email\nfrom t"
 
         // Act
-        let hints = hint.parse_hints(sql)
+        let hints = parse_hints(sql)
 
         // Assert
         hints
@@ -59,7 +59,7 @@ pub fn tests() -> TestSuite {
         let sql = "-- params: a?\n-- params: b"
 
         // Act
-        let hints = hint.parse_hints(sql)
+        let hints = parse_hints(sql)
 
         // Assert
         hints.parameters
@@ -71,10 +71,10 @@ pub fn tests() -> TestSuite {
     group("is_optional_parameter", [
       it("is True for a name with ?", fn() {
         // Arrange
-        let hints = hint.parse_hints("-- params: a, b?")
+        let hints = parse_hints("-- params: a, b?")
 
         // Act
-        let optional = hint.is_optional_parameter(hints, 2)
+        let optional = is_optional_parameter(hints, 2)
 
         // Assert
         optional
@@ -84,10 +84,10 @@ pub fn tests() -> TestSuite {
       }),
       it("is False for a name without ?", fn() {
         // Arrange
-        let hints = hint.parse_hints("-- params: a, b?")
+        let hints = parse_hints("-- params: a, b?")
 
         // Act
-        let optional = hint.is_optional_parameter(hints, 1)
+        let optional = is_optional_parameter(hints, 1)
 
         // Assert
         optional
@@ -97,10 +97,10 @@ pub fn tests() -> TestSuite {
       }),
       it("is False for a position after the last name", fn() {
         // Arrange
-        let hints = hint.parse_hints("-- params: a?")
+        let hints = parse_hints("-- params: a?")
 
         // Act
-        let optional = hint.is_optional_parameter(hints, 2)
+        let optional = is_optional_parameter(hints, 2)
 
         // Assert
         optional
@@ -110,10 +110,10 @@ pub fn tests() -> TestSuite {
       }),
       it("is False without a params line", fn() {
         // Arrange
-        let hints = hint.parse_hints("select $1")
+        let hints = parse_hints("select $1")
 
         // Act
-        let optional = hint.is_optional_parameter(hints, 1)
+        let optional = is_optional_parameter(hints, 1)
 
         // Assert
         optional

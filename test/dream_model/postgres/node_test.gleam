@@ -2,14 +2,16 @@
 //// text format.
 
 import dream_model/postgres/node.{
-  Bitmapset, Empty, IntegerList, Integers, NodeList, NotAnInteger, Oids, Record,
-  Token, TransactionIds, UnexpectedEnd, UnexpectedToken,
+  type Node, type ParseError, Bitmapset, Empty, IntegerList, Integers, NodeList,
+  NotAnInteger, Oids, Record, Token, TransactionIds, UnexpectedEnd,
+  UnexpectedToken, get_field, get_item, integer, integers, items, node_name,
+  parse, remove_locations,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import gleam/dict
-import gleam/result
+import gleam/dict.{from_list}
+import gleam/result.{unwrap}
 
 pub fn tests() -> TestSuite {
   describe("dream_model/postgres/node", [
@@ -20,17 +22,17 @@ pub fn tests() -> TestSuite {
   ])
 }
 
-fn record(name: String, fields: List(#(String, node.Node))) -> node.Node {
-  Record(name:, fields: dict.from_list(fields))
+fn record(name: String, fields: List(#(String, Node))) -> Node {
+  Record(name:, fields: from_list(fields))
 }
 
-fn parse_case(name: String, text: String, expected: node.Node) {
+fn parse_case(name: String, text: String, expected: Node) {
   it(name, fn() {
     // Arrange
     let input = text
 
     // Act
-    let parsed = node.parse(input)
+    let parsed = parse(input)
 
     // Assert
     parsed
@@ -144,13 +146,13 @@ fn name_tests() {
   ])
 }
 
-fn error_case(name: String, text: String, expected: node.ParseError) {
+fn error_case(name: String, text: String, expected: ParseError) {
   it(name, fn() {
     // Arrange
     let input = text
 
     // Act
-    let parsed = node.parse(input)
+    let parsed = parse(input)
 
     // Assert
     parsed
@@ -213,93 +215,69 @@ fn accessor_case(name: String, read: fn() -> a, expected: a) {
   })
 }
 
-fn sample() -> node.Node {
-  node.parse(
+fn sample() -> Node {
+  parse(
     "{QUERY :a 1 :list ({X :location 3 :inner {Y :location 4 :v 1}}) :set (b 2)}",
   )
-  |> result.unwrap(Empty)
+  |> unwrap(Empty)
 }
 
 fn accessor_tests() {
   group("accessors", [
     accessor_case(
       "get_field returns a field",
-      fn() { node.get_field(sample(), "a") },
+      fn() { get_field(sample(), "a") },
       Token("1"),
     ),
     accessor_case(
       "get_field returns Empty for a missing field",
-      fn() { node.get_field(sample(), "missing") },
+      fn() { get_field(sample(), "missing") },
       Empty,
     ),
     accessor_case(
       "get_field returns Empty for a value that is not a node",
-      fn() { node.get_field(Token("1"), "a") },
+      fn() { get_field(Token("1"), "a") },
       Empty,
     ),
     accessor_case(
       "get_item returns Empty after the last item",
-      fn() { node.get_item(node.get_field(sample(), "list"), 1) },
+      fn() { get_item(get_field(sample(), "list"), 1) },
       Empty,
     ),
-    accessor_case(
-      "items of Empty is the empty list",
-      fn() { node.items(Empty) },
-      [],
-    ),
+    accessor_case("items of Empty is the empty list", fn() { items(Empty) }, []),
     accessor_case(
       "items of a list of numbers are tokens",
-      fn() { node.items(IntegerList(Bitmapset, [2])) },
+      fn() { items(IntegerList(Bitmapset, [2])) },
       [Token("2")],
     ),
-    accessor_case(
-      "items of a token is that token",
-      fn() { node.items(Token("x")) },
-      [
-        Token("x"),
-      ],
-    ),
-    accessor_case(
-      "items of a node is that node",
-      fn() { node.items(sample()) },
-      [
-        sample(),
-      ],
-    ),
+    accessor_case("items of a token is that token", fn() { items(Token("x")) }, [
+      Token("x"),
+    ]),
+    accessor_case("items of a node is that node", fn() { items(sample()) }, [
+      sample(),
+    ]),
     accessor_case(
       "integers of a list of numbers",
-      fn() { node.integers(node.get_field(sample(), "set")) },
+      fn() { integers(get_field(sample(), "set")) },
       [2],
     ),
     accessor_case(
       "integers of another value is empty",
-      fn() { node.integers(Token("1")) },
+      fn() { integers(Token("1")) },
       [],
     ),
-    accessor_case(
-      "node_name of a node",
-      fn() { node.node_name(sample()) },
-      "QUERY",
-    ),
+    accessor_case("node_name of a node", fn() { node_name(sample()) }, "QUERY"),
     accessor_case(
       "node_name of a token is empty",
-      fn() { node.node_name(Token("x")) },
+      fn() { node_name(Token("x")) },
       "",
     ),
     accessor_case("text of a node is empty", fn() { node.text(sample()) }, ""),
-    accessor_case(
-      "integer of a number",
-      fn() { node.integer(Token("12")) },
-      Ok(12),
-    ),
-    accessor_case(
-      "integer of a word",
-      fn() { node.integer(Token("x")) },
-      Error(Nil),
-    ),
+    accessor_case("integer of a number", fn() { integer(Token("12")) }, Ok(12)),
+    accessor_case("integer of a word", fn() { integer(Token("x")) }, Error(Nil)),
     accessor_case(
       "remove_locations removes every location field",
-      fn() { node.remove_locations(node.get_field(sample(), "list")) },
+      fn() { remove_locations(get_field(sample(), "list")) },
       NodeList([
         record("X", [#("inner", record("Y", [#("v", Token("1"))]))]),
       ]),

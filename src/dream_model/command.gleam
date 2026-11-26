@@ -16,23 +16,40 @@
 //// - `models`: the model folders, for example `["src/app/models/user"]`.
 ////   The default is every folder under `src` that holds a `.sql` file.
 
-import dream_model/generator/fingerprint
+import dream_model/generator/fingerprint.{compute}
 import dream_model/generator/model.{type Unit, Unit}
-import dream_model/generator/name
-import dream_model/generator/query.{type Problem}
-import dream_model/generator/query_hint
-import dream_model/nullability.{type Analyzer}
-import filepath
-import gleam/bool
-import gleam/dict
-import gleam/int
-import gleam/io
-import gleam/list
+import dream_model/generator/name.{to_type_name}
+import dream_model/generator/query.{
+  type Model, type Problem, type Query, Model, analyze, problem_to_string,
+}
+import dream_model/generator/query_hint.{is_module_segment}
+import dream_model/nullability.{
+  type AnalysisError, type Analyzer, close, connect, error_to_string,
+}
+import filepath.{directory_name}
+import gleam/bool.{guard, lazy_guard}
+import gleam/dict.{type Dict, keys, new}
+import gleam/int.{to_string}
+import gleam/io.{print}
+import gleam/list.{
+  all, contains, filter, filter_map, flat_map, fold, index_map, last, reverse,
+  sort, try_each, try_map, unique, zip,
+}
 import gleam/option.{type Option, None, Some}
-import gleam/result
-import gleam/string
-import simplifile
-import tom
+import gleam/result.{
+  is_error, map_error, replace, replace_error, try, unwrap_error,
+}
+import gleam/string.{
+  compare, concat, drop_end, drop_start, ends_with, split, starts_with,
+}
+import simplifile.{
+  type FileError, Enoent, Enotdir, create_directory_all, delete, describe_error,
+  get_files, is_file, read, read_directory, write,
+}
+import tom.{
+  type GetError, type Toml, NotFound, WrongType, as_string, get_array,
+  get_string, get_table, parse,
+}
 
 /// What the command prints, and its exit status.
 pub type Outcome {
@@ -85,7 +102,7 @@ pub fn main(
   halt: fn(Int) -> Nil,
 ) -> Nil {
   let outcome = run(arguments, directory, read_environment)
-  io.print(outcome.output)
+  print(outcome.output)
   case outcome.status {
     0 -> Nil
     status -> halt(status)
@@ -110,51 +127,47 @@ fn execute(
   directory: String,
   read_environment: fn(String) -> Result(String, Nil),
 ) -> Result(String, String) {
-  use mode <- result.try(parse_arguments(arguments))
-  use config <- result.try(read_config(directory))
-  use folders <- result.try(find_folders(directory, config))
-  use stale <- result.try(find_stale_modules(directory))
-  use <- bool.guard(
+  use mode <- try(parse_arguments(arguments))
+  use config <- try(read_config(directory))
+  use folders <- try(find_folders(directory, config))
+  use stale <- try(find_stale_modules(directory))
+  use <- guard(
     when: folders == [] && stale == [],
     return: Ok(
       "dream_model found no folder with .sql files under src; there is nothing to generate.\n",
     ),
   )
-  use <- bool.lazy_guard(when: folders == [], return: fn() {
+  use <- lazy_guard(when: folders == [], return: fn() {
     finish(mode, directory, [], stale)
   })
-  use url <- result.try(
+  use url <- try(
     read_environment(config.database_url_variable)
-    |> result.replace_error(
+    |> replace_error(
       "dream_model needs the URL of the database in the environment variable "
       <> config.database_url_variable
       <> ", for example postgresql://user:password@localhost:5432/app\n",
     ),
   )
-  use analyzer <- result.try(
-    nullability.connect(url)
-    |> result.map_error(fn(error) {
-      "dream_model cannot use the database: "
-      <> nullability.error_to_string(error)
-      <> "\n"
+  use analyzer <- try(
+    connect(url)
+    |> map_error(fn(error) {
+      "dream_model cannot use the database: " <> error_to_string(error) <> "\n"
     }),
   )
   let generated = generate(analyzer, directory, folders)
-  let closed = nullability.close(analyzer)
-  use modules <- result.try(generated)
-  use Nil <- result.try(check_closed(closed))
+  let closed = close(analyzer)
+  use modules <- try(generated)
+  use Nil <- try(check_closed(closed))
   finish(mode, directory, modules, stale)
 }
 
 /// The analysis is complete, so a failed goodbye to the server changes no
 /// module. It still means the connection broke, so the command fails and
 /// says so, and writes nothing.
-pub fn check_closed(
-  closed: Result(Nil, nullability.AnalysisError),
-) -> Result(Nil, String) {
-  result.map_error(closed, fn(error) {
+pub fn check_closed(closed: Result(Nil, AnalysisError)) -> Result(Nil, String) {
+  map_error(closed, fn(error) {
     "dream_model cannot close the database connection: "
-    <> nullability.error_to_string(error)
+    <> error_to_string(error)
     <> "\n"
   })
 }
@@ -178,41 +191,36 @@ pub fn parse_arguments(arguments: List(String)) -> Result(Mode, String) {
 /// Reads `[tools.dream_model]` of the project's `gleam.toml`.
 pub fn read_config(directory: String) -> Result(Config, String) {
   let path = filepath.join(directory, "gleam.toml")
-  use text <- result.try(
-    simplifile.read(path)
-    |> result.map_error(fn(error) {
-      "dream_model cannot read gleam.toml: "
-      <> simplifile.describe_error(error)
-      <> "\n"
+  use text <- try(
+    read(path)
+    |> map_error(fn(error) {
+      "dream_model cannot read gleam.toml: " <> describe_error(error) <> "\n"
     }),
   )
-  use toml <- result.try(
-    tom.parse(text)
-    |> result.replace_error("dream_model cannot parse gleam.toml\n"),
+  use toml <- try(
+    parse(text)
+    |> replace_error("dream_model cannot parse gleam.toml\n"),
   )
-  let table =
-    tom.get_table(toml, ["tools", "dream_model"]) |> result.unwrap(dict.new())
-  use Nil <- result.try(check_keys(table))
-  use database_url_variable <- result.try(
-    optional_setting(tom.get_string(table, ["database_url_variable"]))
+  let table = get_table(toml, ["tools", "dream_model"]) |> result.unwrap(new())
+  use Nil <- try(check_keys(table))
+  use database_url_variable <- try(
+    optional_setting(get_string(table, ["database_url_variable"]))
     |> result.map(option.unwrap(_, default_database_url_variable))
-    |> result.replace_error(setting_error("database_url_variable", "a string")),
+    |> replace_error(setting_error("database_url_variable", "a string")),
   )
   use models <- result.map(
-    optional_setting(tom.get_array(table, ["models"]))
-    |> result.try(option_try(_, strings))
-    |> result.replace_error(setting_error("models", "a list of folders")),
+    optional_setting(get_array(table, ["models"]))
+    |> try(option_try(_, strings))
+    |> replace_error(setting_error("models", "a list of folders")),
   )
   Config(database_url_variable:, models:)
 }
 
-fn check_keys(table: dict.Dict(String, tom.Toml)) -> Result(Nil, String) {
+fn check_keys(table: Dict(String, Toml)) -> Result(Nil, String) {
   let unknown =
-    dict.keys(table)
-    |> list.filter(fn(key) {
-      !list.contains(["database_url_variable", "models"], key)
-    })
-    |> list.sort(string.compare)
+    keys(table)
+    |> filter(fn(key) { !contains(["database_url_variable", "models"], key) })
+    |> sort(compare)
   case unknown {
     [] -> Ok(Nil)
     _ ->
@@ -233,11 +241,11 @@ fn setting_error(key: String, expected: String) -> String {
 }
 
 /// A missing setting is `None`; a setting of another type is an error.
-fn optional_setting(found: Result(a, tom.GetError)) -> Result(Option(a), Nil) {
+fn optional_setting(found: Result(a, GetError)) -> Result(Option(a), Nil) {
   case found {
     Ok(value) -> Ok(Some(value))
-    Error(tom.NotFound(_)) -> Ok(None)
-    Error(tom.WrongType(..)) -> Error(Nil)
+    Error(NotFound(_)) -> Ok(None)
+    Error(WrongType(..)) -> Error(Nil)
   }
 }
 
@@ -251,10 +259,8 @@ fn option_try(
   }
 }
 
-fn strings(items: List(tom.Toml)) -> Result(List(String), Nil) {
-  list.try_map(items, fn(item) {
-    tom.as_string(item) |> result.replace_error(Nil)
-  })
+fn strings(items: List(Toml)) -> Result(List(String), Nil) {
+  try_map(items, fn(item) { as_string(item) |> replace_error(Nil) })
 }
 
 // --- Folders ---------------------------------------------------------------
@@ -265,16 +271,14 @@ pub fn find_folders(
   directory: String,
   config: Config,
 ) -> Result(List(String), String) {
-  use folders <- result.try(case config.models {
+  use folders <- try(case config.models {
     Some(models) -> check_model_folders(directory, models)
     None -> discover_folders(directory)
   })
   let refused =
-    list.filter(folders, fn(folder) {
-      result.is_error(module_of_folder(folder))
-    })
+    filter(folders, fn(folder) { is_error(module_of_folder(folder)) })
   case refused {
-    [] -> Ok(list.sort(folders, string.compare))
+    [] -> Ok(sort(folders, compare))
     _ ->
       Error(
         "these model folders are not Gleam module paths under src: "
@@ -286,15 +290,15 @@ pub fn find_folders(
 
 fn discover_folders(directory: String) -> Result(List(String), String) {
   use files <- result.map(source_files(directory))
-  list.filter(files, string.ends_with(_, ".sql"))
+  filter(files, ends_with(_, ".sql"))
   |> list.map(fn(file) {
-    let folder = filepath.directory_name(file)
+    let folder = directory_name(file)
     case folder {
       "src/" <> _ -> folder
       _ -> "src"
     }
   })
-  |> list.unique
+  |> unique
 }
 
 /// Every file under `src`, as a path relative to the project, for example
@@ -302,15 +306,15 @@ fn discover_folders(directory: String) -> Result(List(String), String) {
 fn source_files(directory: String) -> Result(List(String), String) {
   let source = filepath.join(directory, "src")
   use files <- result.map(
-    simplifile.get_files(in: source)
-    |> result.map_error(fn(error) {
+    get_files(in: source)
+    |> map_error(fn(error) {
       "dream_model cannot read the src folder: "
-      <> simplifile.describe_error(error)
+      <> describe_error(error)
       <> "\n"
     }),
   )
   list.map(files, fn(file) {
-    "src/" <> string.drop_start(file, string.length(source) + 1)
+    "src/" <> drop_start(file, string.length(source) + 1)
   })
 }
 
@@ -319,18 +323,18 @@ fn source_files(directory: String) -> Result(List(String), String) {
 /// path without `.gleam`.
 fn find_stale_modules(directory: String) -> Result(List(String), String) {
   use files <- result.map(source_files(directory))
-  list.filter(files, fn(file) {
-    let folder = string.drop_end(file, string.length(".gleam"))
-    string.ends_with(file, ".gleam")
+  filter(files, fn(file) {
+    let folder = drop_end(file, string.length(".gleam"))
+    ends_with(file, ".gleam")
     && starts_with_header(directory, file, folder)
     && sql_files(directory, folder) |> result.unwrap([]) == []
   })
-  |> list.sort(string.compare)
+  |> sort(compare)
 }
 
 fn starts_with_header(directory: String, path: String, folder: String) -> Bool {
-  simplifile.read(filepath.join(directory, path))
-  |> result.map(string.starts_with(_, model.header_line(folder) <> "\n"))
+  read(filepath.join(directory, path))
+  |> result.map(starts_with(_, model.header_line(folder) <> "\n"))
   |> result.unwrap(False)
 }
 
@@ -339,7 +343,7 @@ fn check_model_folders(
   models: List(String),
 ) -> Result(List(String), String) {
   let missing =
-    list.filter(models, fn(folder) {
+    filter(models, fn(folder) {
       sql_files(directory, folder) |> result.unwrap([]) == []
     })
   case missing {
@@ -354,11 +358,11 @@ fn check_model_folders(
 }
 
 fn sql_files(directory: String, folder: String) -> Result(List(String), Nil) {
-  simplifile.read_directory(filepath.join(directory, folder))
-  |> result.replace_error(Nil)
+  read_directory(filepath.join(directory, folder))
+  |> replace_error(Nil)
   |> result.map(fn(entries) {
-    list.filter(entries, string.ends_with(_, ".sql"))
-    |> list.sort(string.compare)
+    filter(entries, ends_with(_, ".sql"))
+    |> sort(compare)
   })
 }
 
@@ -371,7 +375,7 @@ pub fn module_of_folder(folder: String) -> Result(String, Nil) {
 }
 
 fn check_module_path(module: String) -> Result(String, Nil) {
-  case list.all(string.split(module, "/"), query_hint.is_module_segment) {
+  case all(split(module, "/"), is_module_segment) {
     True -> Ok(module)
     False -> Error(Nil)
   }
@@ -385,15 +389,15 @@ fn generate(
   folders: List(String),
 ) -> Result(List(Generated), String) {
   let #(units, problems, analyzer) =
-    list.fold(folders, #([], [], analyzer), fn(state, folder) {
+    fold(folders, #([], [], analyzer), fn(state, folder) {
       let #(units, problems, analyzer) = state
       let #(unit, found, analyzer) = analyze_folder(analyzer, directory, folder)
       #([unit, ..units], list.append(problems, found), analyzer)
     })
-  let units = list.reverse(units)
-  use Nil <- result.try(refuse_problems(problems))
-  use Nil <- result.try(refuse_problems(model.check_types(units)))
-  use texts <- result.try(render_units(analyzer, units))
+  let units = reverse(units)
+  use Nil <- try(refuse_problems(problems))
+  use Nil <- try(refuse_problems(model.check_types(units)))
+  use texts <- try(render_units(analyzer, units))
   format(directory, texts)
 }
 
@@ -403,12 +407,11 @@ fn analyze_folder(
   folder: String,
 ) -> #(Unit, List(Problem), Analyzer) {
   let module = module_of_folder(folder) |> result.unwrap(folder)
-  let folder_name = string.split(module, "/") |> list.last |> result.unwrap("")
-  let model_info =
-    query.Model(module:, type_name: name.to_type_name(folder_name))
+  let folder_name = split(module, "/") |> last |> result.unwrap("")
+  let model_info = Model(module:, type_name: to_type_name(folder_name))
   let files = sql_files(directory, folder) |> result.unwrap([])
   let #(queries, problems, analyzer) =
-    list.fold(files, #([], [], analyzer), fn(state, file) {
+    fold(files, #([], [], analyzer), fn(state, file) {
       let #(queries, problems, analyzer) = state
       let path = folder <> "/" <> file
       let #(described, analyzer) =
@@ -419,7 +422,7 @@ fn analyze_folder(
       }
     })
   #(
-    Unit(model: model_info, folder:, queries: list.reverse(queries)),
+    Unit(model: model_info, folder:, queries: reverse(queries)),
     problems,
     analyzer,
   )
@@ -427,18 +430,18 @@ fn analyze_folder(
 
 fn analyze_file(
   analyzer: Analyzer,
-  model_info: query.Model,
+  model_info: Model,
   directory: String,
   path: String,
-) -> #(Result(query.Query, List(Problem)), Analyzer) {
-  case simplifile.read(filepath.join(directory, path)) {
-    Ok(sql) -> query.analyze(analyzer, model_info, path, sql)
+) -> #(Result(Query, List(Problem)), Analyzer) {
+  case read(filepath.join(directory, path)) {
+    Ok(sql) -> analyze(analyzer, model_info, path, sql)
     Error(error) -> #(
       Error([
         query.Problem(
           file: path,
           line: 1,
-          message: "cannot read the file: " <> simplifile.describe_error(error),
+          message: "cannot read the file: " <> describe_error(error),
         ),
       ]),
       analyzer,
@@ -451,12 +454,10 @@ fn refuse_problems(problems: List(Problem)) -> Result(Nil, String) {
     [] -> Ok(Nil)
     _ ->
       Error(
-        list.map(problems, fn(problem) {
-          query.problem_to_string(problem) <> "\n"
-        })
-        |> string.concat
+        list.map(problems, fn(problem) { problem_to_string(problem) <> "\n" })
+        |> concat
         <> "dream_model wrote nothing: "
-        <> int.to_string(list.length(problems))
+        <> to_string(list.length(problems))
         <> " problem(s).\n",
       )
   }
@@ -466,26 +467,24 @@ fn render_units(
   analyzer: Analyzer,
   units: List(Unit),
 ) -> Result(List(Generated), String) {
-  list.try_map(units, fn(unit) {
+  try_map(units, fn(unit) {
     let tables =
-      list.flat_map(unit.queries, fn(found) { found.relations })
-      |> list.unique
-      |> list.sort(string.compare)
+      flat_map(unit.queries, fn(found) { found.relations })
+      |> unique
+      |> sort(compare)
     let prefix =
       "dream_model cannot read the schema fingerprint of "
       <> unit.folder
       <> ": "
-    use hash <- result.try(
-      fingerprint.compute(analyzer, tables)
-      |> result.map_error(nullability.error_to_string)
-      |> result.map_error(string.append(prefix, _))
-      |> result.map_error(string.append(_, "\n")),
+    use hash <- try(
+      compute(analyzer, tables)
+      |> map_error(error_to_string)
+      |> map_error(string.append(prefix, _))
+      |> map_error(string.append(_, "\n")),
     )
     model.render(unit, hash)
     |> result.map(Generated(unit.folder <> ".gleam", _))
-    |> result.map_error(fn(problems) {
-      refuse_problems(problems) |> result.unwrap_error("")
-    })
+    |> map_error(fn(problems) { refuse_problems(problems) |> unwrap_error("") })
   })
 }
 
@@ -497,54 +496,52 @@ fn format(
   modules: List(Generated),
 ) -> Result(List(Generated), String) {
   let work = filepath.join(directory, "build/dream_model/format")
-  use Nil <- result.try(check_removed(simplifile.delete(work)))
+  use Nil <- try(check_removed(delete(work)))
   let files =
-    list.index_map(modules, fn(_, index) {
-      "build/dream_model/format/module_" <> int.to_string(index) <> ".gleam"
+    index_map(modules, fn(_, index) {
+      "build/dream_model/format/module_" <> to_string(index) <> ".gleam"
     })
-  use Nil <- result.try(
-    simplifile.create_directory_all(work)
-    |> result.try(fn(_) {
-      list.zip(files, modules)
-      |> list.try_each(fn(pair) {
-        simplifile.write(filepath.join(directory, pair.0), { pair.1 }.text)
+  use Nil <- try(
+    create_directory_all(work)
+    |> try(fn(_) {
+      zip(files, modules)
+      |> try_each(fn(pair) {
+        write(filepath.join(directory, pair.0), { pair.1 }.text)
       })
     })
-    |> result.map_error(fn(error) {
+    |> map_error(fn(error) {
       "dream_model cannot write to build/dream_model: "
-      <> simplifile.describe_error(error)
+      <> describe_error(error)
       <> "\n"
     }),
   )
-  use #(status, output) <- result.try(
+  use #(status, output) <- try(
     run_program(gleam_program, ["format", ..files], directory)
-    |> result.replace_error(
+    |> replace_error(
       "dream_model needs the gleam program on the PATH to format the modules\n",
     ),
   )
-  use <- bool.guard(
+  use <- guard(
     when: status != 0,
     return: Error("gleam format refused a generated module:\n" <> output),
   )
-  list.zip(files, modules)
-  |> list.try_map(fn(pair) {
-    simplifile.read(filepath.join(directory, pair.0))
+  zip(files, modules)
+  |> try_map(fn(pair) {
+    read(filepath.join(directory, pair.0))
     |> result.map(fn(text) { Generated(..pair.1, text:) })
-    |> result.map_error(simplifile.describe_error)
+    |> map_error(describe_error)
   })
 }
 
 /// The format folder of an earlier run is removed first. A folder that
 /// does not exist is fine.
-pub fn check_removed(
-  removed: Result(Nil, simplifile.FileError),
-) -> Result(Nil, String) {
+pub fn check_removed(removed: Result(Nil, FileError)) -> Result(Nil, String) {
   case removed {
-    Ok(Nil) | Error(simplifile.Enoent) | Error(simplifile.Enotdir) -> Ok(Nil)
+    Ok(Nil) | Error(Enoent) | Error(Enotdir) -> Ok(Nil)
     Error(error) ->
       Error(
         "dream_model cannot remove build/dream_model/format: "
-        <> simplifile.describe_error(error)
+        <> describe_error(error)
         <> "\n",
       )
   }
@@ -569,25 +566,25 @@ fn write_modules(
   modules: List(Generated),
   stale: List(String),
 ) -> Result(String, String) {
-  use Nil <- result.try(refuse_foreign_files(directory, modules))
-  use written <- result.try(
-    list.try_map(modules, write_module(directory, _))
-    |> result.map(string.concat),
+  use Nil <- try(refuse_foreign_files(directory, modules))
+  use written <- try(
+    try_map(modules, write_module(directory, _))
+    |> result.map(concat),
   )
   use removed <- result.map(
-    list.try_map(stale, fn(path) {
-      simplifile.delete(filepath.join(directory, path))
-      |> result.replace("removed " <> path <> "\n")
-      |> result.map_error(fn(error) {
+    try_map(stale, fn(path) {
+      delete(filepath.join(directory, path))
+      |> replace("removed " <> path <> "\n")
+      |> map_error(fn(error) {
         "dream_model cannot remove "
         <> path
         <> ": "
-        <> simplifile.describe_error(error)
+        <> describe_error(error)
         <> "\n"
       })
     }),
   )
-  written <> string.concat(removed)
+  written <> concat(removed)
 }
 
 /// Refuses to write over a file that dream_model did not write: one that
@@ -597,9 +594,9 @@ fn refuse_foreign_files(
   modules: List(Generated),
 ) -> Result(Nil, String) {
   let foreign =
-    list.filter(modules, fn(module) {
-      let folder = string.drop_end(module.path, string.length(".gleam"))
-      simplifile.is_file(filepath.join(directory, module.path)) == Ok(True)
+    filter(modules, fn(module) {
+      let folder = drop_end(module.path, string.length(".gleam"))
+      is_file(filepath.join(directory, module.path)) == Ok(True)
       && !starts_with_header(directory, module.path, folder)
     })
   case foreign {
@@ -610,13 +607,10 @@ fn refuse_foreign_files(
           "dream_model will not overwrite "
           <> module.path
           <> ": the file does not start with the line '"
-          <> model.header_line(string.drop_end(
-            module.path,
-            string.length(".gleam"),
-          ))
+          <> model.header_line(drop_end(module.path, string.length(".gleam")))
           <> "', so dream_model did not write it; move the file, and run the command again\n"
         })
-        |> string.concat
+        |> concat
         <> "dream_model wrote nothing.\n",
       )
   }
@@ -628,14 +622,14 @@ fn write_module(
 ) -> Result(String, String) {
   {
     let path = filepath.join(directory, module.path)
-    let unchanged = simplifile.read(path) == Ok(module.text)
+    let unchanged = read(path) == Ok(module.text)
     use Nil <- result.map(
-      simplifile.write(path, module.text)
-      |> result.map_error(fn(error) {
+      write(path, module.text)
+      |> map_error(fn(error) {
         "dream_model cannot write "
         <> module.path
         <> ": "
-        <> simplifile.describe_error(error)
+        <> describe_error(error)
         <> "\n"
       }),
     )
@@ -652,8 +646,8 @@ fn check_modules(
   stale: List(String),
 ) -> Result(String, String) {
   let differing =
-    list.filter_map(modules, fn(module) {
-      case simplifile.read(filepath.join(directory, module.path)) {
+    filter_map(modules, fn(module) {
+      case read(filepath.join(directory, module.path)) {
         Ok(text) if text == module.text -> Error(Nil)
         Ok(_) -> Ok("differs " <> module.path <> "\n")
         Error(_) -> Ok("missing " <> module.path <> "\n")
@@ -664,12 +658,12 @@ fn check_modules(
     [] ->
       Ok(
         "every model module matches its .sql files ("
-        <> int.to_string(list.length(modules))
+        <> to_string(list.length(modules))
         <> " modules)\n",
       )
     _ ->
       Error(
-        string.concat(differing)
+        concat(differing)
         <> "Run `gleam run -m dream_model` to write the modules again.\n",
       )
   }

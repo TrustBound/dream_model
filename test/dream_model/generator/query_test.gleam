@@ -5,21 +5,25 @@ import dream_model/generator/gleam_type.{
 }
 import dream_model/generator/query.{
   type Problem, type Query, Argument, Field, Model, NoOutput, Problem, Query,
-  RecordOutput, ValueOutput,
+  RecordOutput, ValueOutput, function_name, problem_to_string,
+  strip_leading_comments,
 }
 import dream_model/generator/query_hint.{
   LocalType, ReturnsMany, ReturnsNone, ReturnsOne,
 }
-import dream_model/nullability
-import dream_model/nullability/reason
-import dream_model/postgres/tree
+import dream_model/nullability.{
+  HintNamesTableColumn, TreeFailed, close, connect, error_to_string,
+  hint_error_to_string,
+}
+import dream_model/nullability/reason.{NotNullInSchema}
+import dream_model/postgres/tree.{TokenTooLong}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import fixtures/model_database
-import gleam/list
+import fixtures/model_database.{url}
+import gleam/list.{append}
 import gleam/result
-import gleam/string
+import gleam/string.{inspect, repeat}
 
 const folder = "src/app/models/user/"
 
@@ -39,7 +43,7 @@ fn analyze(
   file: String,
   sql: String,
 ) -> Result(Query, List(Problem)) {
-  let assert Ok(analyzer) = nullability.connect(model_database.url(version))
+  let assert Ok(analyzer) = connect(url(version))
   let #(found, analyzer) =
     query.analyze(
       analyzer,
@@ -47,7 +51,7 @@ fn analyze(
       folder <> file,
       sql,
     )
-  let _ = nullability.close(analyzer)
+  let _ = close(analyzer)
   found
 }
 
@@ -286,23 +290,16 @@ fn refusal_tests(version: Int) {
         problem(
           "list.sql",
           2,
-          nullability.hint_error_to_string(nullability.HintNamesTableColumn(
-            "email",
-            reason.NotNullInSchema,
-          )),
+          hint_error_to_string(HintNamesTableColumn("email", NotNullInSchema)),
         ),
       ],
     ),
     #(
       "gives another error of the analysis at the statement",
       "long.sql",
-      "-- returns: one\nselect 1 as \"" <> string.repeat("(", 40) <> "\"",
+      "-- returns: one\nselect 1 as \"" <> repeat("(", 40) <> "\"",
       [
-        problem(
-          "long.sql",
-          2,
-          nullability.error_to_string(nullability.TreeFailed(tree.TokenTooLong)),
-        ),
+        problem("long.sql", 2, error_to_string(TreeFailed(TokenTooLong))),
       ],
     ),
     #(
@@ -462,7 +459,7 @@ fn refusal_tests(version: Int) {
         found
         |> should
         |> be_equal(expected)
-        |> or_fail_with("Expected " <> string.inspect(expected))
+        |> or_fail_with("Expected " <> inspect(expected))
       })
     }),
   )
@@ -594,7 +591,7 @@ fn parameter_tests(version: Int) {
   ]
   group(
     "parameter names",
-    list.append(
+    append(
       [
         it("names the parameters with the params hint", fn() {
           // Act
@@ -644,7 +641,7 @@ fn parameter_tests(version: Int) {
           found
           |> should
           |> be_equal(expected)
-          |> or_fail_with("Expected " <> string.inspect(expected))
+          |> or_fail_with("Expected " <> inspect(expected))
         })
       }),
     ),
@@ -899,7 +896,7 @@ fn element_hint_tests(version: Int) {
         found
         |> should
         |> be_equal(expected)
-        |> or_fail_with("Expected " <> string.inspect(expected))
+        |> or_fail_with("Expected " <> inspect(expected))
       })
     })
   ])
@@ -909,7 +906,7 @@ fn text_tests() {
   group("texts", [
     it("problem_to_string writes file:line: message", fn() {
       // Act
-      let text = query.problem_to_string(Problem("a.sql", 3, "wrong"))
+      let text = problem_to_string(Problem("a.sql", 3, "wrong"))
 
       // Assert
       text
@@ -919,7 +916,7 @@ fn text_tests() {
     }),
     it("function_name gives the snake case name of the file", fn() {
       // Act
-      let found = query.function_name("src/app/models/user/findByEmail.sql")
+      let found = function_name("src/app/models/user/findByEmail.sql")
 
       // Assert
       found
@@ -929,8 +926,7 @@ fn text_tests() {
     }),
     it("strip_leading_comments keeps the statement and its line", fn() {
       // Act
-      let found =
-        query.strip_leading_comments("-- a\n\n  -- b\nselect 1\n-- c\n\n")
+      let found = strip_leading_comments("-- a\n\n  -- b\nselect 1\n-- c\n\n")
 
       // Assert
       found

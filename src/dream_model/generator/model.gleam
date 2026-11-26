@@ -4,11 +4,14 @@
 //// The text that `render` returns is valid Gleam. The command formats it
 //// with `gleam format` before it writes it.
 
-import dream_model/generator/gleam_type
+import dream_model/generator/gleam_type.{
+  ListType, decoder_text, encode_call, has_numeric, promised_list_text,
+  type_text,
+}
 import dream_model/generator/name
 import dream_model/generator/query.{
-  type Argument, type Field, type Problem, type Query, NoOutput, Problem,
-  RecordOutput, ValueOutput,
+  type Argument, type Field, type Model, type Problem, type Query, NoOutput,
+  Problem, RecordOutput, ValueOutput, problem_to_string,
 }
 import dream_model/generator/query_hint.{
   type TypeName, LocalType, ModuleType, ReturnsMany, ReturnsMaybe, ReturnsNone,
@@ -16,16 +19,19 @@ import dream_model/generator/query_hint.{
 }
 import dream_model/generator/unqualified.{type Import, Import, unqualify}
 import gleam/dict
-import gleam/int
-import gleam/list
-import gleam/option.{type Option, None, Some}
-import gleam/result
-import gleam/string
+import gleam/int.{to_string}
+import gleam/list.{
+  any, contains, count, drop, filter, filter_map, find, flat_map, flatten, fold,
+  index_map, key_find, length, reverse, sort, take, unique,
+}
+import gleam/option.{type Option, None, Some, from_result}
+import gleam/result.{try, unwrap}
+import gleam/string.{compare, concat, join, replace, split, starts_with}
 
 /// The SQL files of one model folder, described.
 pub type Unit {
   Unit(
-    model: query.Model,
+    model: Model,
     /// The folder of the SQL files, for example `src/app/models/user`.
     folder: String,
     /// Sorted by file name.
@@ -86,26 +92,23 @@ pub const reserved_type_names = [
 /// the same order, with the same types, and that a type of another model
 /// is a type that a SQL file of that model returns.
 pub fn check_types(units: List(Unit)) -> List(Problem) {
-  let definitions = list.flat_map(units, unit_definitions)
+  let definitions = flat_map(units, unit_definitions)
   let mismatches =
     list.group(definitions, fn(definition) {
       #(definition.module, definition.name)
     })
     |> dict.values
-    |> list.flat_map(fn(group) { compare_group(list.reverse(group)) })
+    |> flat_map(fn(group) { compare_group(reverse(group)) })
   let unknown =
-    list.flat_map(units, fn(unit) { unknown_types(unit, units, definitions) })
+    flat_map(units, fn(unit) { unknown_types(unit, units, definitions) })
   list.append(unknown, mismatches)
-  |> list.sort(fn(first, second) {
-    string.compare(
-      query.problem_to_string(first),
-      query.problem_to_string(second),
-    )
+  |> sort(fn(first, second) {
+    compare(problem_to_string(first), problem_to_string(second))
   })
 }
 
 fn unit_definitions(unit: Unit) -> List(Definition) {
-  list.filter_map(unit.queries, fn(found) {
+  filter_map(unit.queries, fn(found) {
     case found.output {
       RecordOutput(type_name:, fields:, line:) -> {
         let #(module, type_base) = qualify(unit, type_name)
@@ -142,10 +145,8 @@ fn qualify(unit: Unit, type_name: TypeName) -> #(String, String) {
 
 fn compare_group(group: List(Definition)) -> List(Problem) {
   let first = list.first(group)
-  list.drop(group, 1)
-  |> list.filter_map(fn(other) {
-    result.try(first, compare_definition(_, other))
-  })
+  drop(group, 1)
+  |> filter_map(fn(other) { try(first, compare_definition(_, other)) })
 }
 
 fn compare_definition(
@@ -215,7 +216,7 @@ fn unknown_types(
   units: List(Unit),
   definitions: List(Definition),
 ) -> List(Problem) {
-  list.filter_map(unit.queries, fn(found) {
+  filter_map(unit.queries, fn(found) {
     case found.output {
       RecordOutput(type_name: ModuleType(module:, name: type_base), line:, ..)
         if module != unit.model.module
@@ -235,13 +236,13 @@ fn check_module_type(
   module: String,
   type_base: String,
 ) -> Result(String, Nil) {
-  let owner = list.find(units, fn(unit) { unit.model.module == module })
+  let owner = find(units, fn(unit) { unit.model.module == module })
   let defined =
-    list.any(definitions, fn(definition) {
+    any(definitions, fn(definition) {
       definition.module == module
       && definition.name == type_base
       && result.map(owner, fn(unit) {
-        string.starts_with(definition.file, unit.folder <> "/")
+        starts_with(definition.file, unit.folder <> "/")
       })
       == Ok(True)
     })
@@ -278,21 +279,21 @@ pub fn render(unit: Unit, hash: String) -> Result(String, List(Problem)) {
   use Nil <- result.map(check_names(unit, imports, records))
   let functions =
     list.map(unit.queries, render_function(unit, _, records, decoders))
-  let used_helpers = list.map(unit.queries, helper_of) |> list.unique
+  let used_helpers = list.map(unit.queries, helper_of) |> unique
   let code =
     [
       render_fingerprint(unit, hash),
-      ..list.flatten([
-        list.filter_map(records, render_type(unit, _)),
+      ..flatten([
+        filter_map(records, render_type(unit, _)),
         functions,
         render_decoders(unit, records, decoders),
         render_helpers(used_helpers),
       ])
     ]
-    |> string.join("\n\n")
+    |> join("\n\n")
   let #(import_lines, code) = unqualify(code, import_modules(imports, records))
   [header(unit), render_imports(unit, import_lines), code]
-  |> string.join("\n\n")
+  |> join("\n\n")
   |> string.append("\n")
 }
 
@@ -312,7 +313,7 @@ pub fn header_line(folder: String) -> String {
 
 /// The modules of other models that the module imports, with their alias.
 fn model_imports(unit: Unit) -> List(#(String, String)) {
-  list.filter_map(unit.queries, fn(found) {
+  filter_map(unit.queries, fn(found) {
     case found.output {
       RecordOutput(type_name: ModuleType(module:, ..), ..)
         if module != unit.model.module
@@ -320,17 +321,17 @@ fn model_imports(unit: Unit) -> List(#(String, String)) {
       _ -> Error(Nil)
     }
   })
-  |> list.unique
-  |> list.sort(fn(first, second) { string.compare(first.0, second.0) })
+  |> unique
+  |> sort(fn(first, second) { compare(first.0, second.0) })
 }
 
 fn module_alias(module: String) -> String {
-  string.split(module, "/") |> list.last |> result.unwrap(module)
+  split(module, "/") |> list.last |> unwrap(module)
 }
 
-/// The modules that the code of a generated module can use, in the order
-/// in which they get a bare name that two of them give: `client.int`
-/// keeps the bare name `int`, and `decode.int` keeps its module.
+/// The modules that the code of a generated module can use. A name that two
+/// of them give, for example `client.int` and `decode.int`, keeps its
+/// module on both sides.
 fn import_modules(
   imports: List(#(String, String)),
   records: List(Record),
@@ -338,7 +339,7 @@ fn import_modules(
   let models =
     list.map(imports, fn(entry) {
       let names =
-        list.filter_map(records, fn(record) {
+        filter_map(records, fn(record) {
           case record.alias == Some(entry.1) {
             True -> Ok(record.name)
             False -> Error(Nil)
@@ -372,20 +373,19 @@ fn import_modules(
 
 fn render_imports(unit: Unit, import_lines: List(String)) -> String {
   let has_option =
-    list.any(unit.queries, fn(found) {
-      list.any(output_fields(found), fn(field) { field.optional })
-      || list.any(found.arguments, fn(argument) { argument.optional })
+    any(unit.queries, fn(found) {
+      any(output_fields(found), fn(field) { field.optional })
+      || any(found.arguments, fn(argument) { argument.optional })
     })
-  let has_maybe =
-    list.any(unit.queries, fn(found) { found.returns == ReturnsMaybe })
+  let has_maybe = any(unit.queries, fn(found) { found.returns == ReturnsMaybe })
   let option_import = case has_maybe, has_option {
     True, _ -> ["import gleam/option.{type Option, None, Some}"]
     False, True -> ["import gleam/option.{type Option}"]
     False, False -> []
   }
   list.append(import_lines, option_import)
-  |> list.sort(string.compare)
-  |> string.join("\n")
+  |> sort(compare)
+  |> join("\n")
 }
 
 fn output_fields(found: Query) -> List(Field) {
@@ -409,15 +409,15 @@ fn check_names(
 ) -> Result(Nil, List(Problem)) {
   let aliases = list.map(imports, fn(entry) { entry.1 })
   let taken =
-    list.flatten([
+    flatten([
       helper_names,
       standard_aliases,
       aliases,
       list.map(records, record_decoder_name),
     ])
   let function_problems =
-    list.filter_map(unit.queries, fn(found) {
-      case list.contains(taken, found.function) {
+    filter_map(unit.queries, fn(found) {
+      case contains(taken, found.function) {
         True ->
           Ok(Problem(
             file: found.file,
@@ -430,10 +430,10 @@ fn check_names(
       }
     })
   let alias_problems =
-    list.filter_map(imports, fn(entry) {
+    filter_map(imports, fn(entry) {
       let clashes =
-        list.count(aliases, fn(alias) { alias == entry.1 }) > 1
-        || list.contains(standard_aliases, entry.1)
+        count(aliases, fn(alias) { alias == entry.1 }) > 1
+        || contains(standard_aliases, entry.1)
       case clashes {
         True ->
           Ok(Problem(
@@ -449,10 +449,10 @@ fn check_names(
       }
     })
   let field_problems =
-    list.filter_map(unit.queries, fn(found) {
+    filter_map(unit.queries, fn(found) {
       let clashing =
         output_fields(found)
-        |> list.find(fn(field) { list.contains(aliases, field.name) })
+        |> find(fn(field) { contains(aliases, field.name) })
       case found.output, clashing {
         RecordOutput(type_name: ModuleType(module:, ..), line:, ..), Ok(field)
           if module != unit.model.module
@@ -470,8 +470,8 @@ fn check_names(
       }
     })
   let type_problems =
-    list.filter_map(records, fn(record) {
-      case record.alias, list.contains(reserved_type_names, record.name) {
+    filter_map(records, fn(record) {
+      case record.alias, contains(reserved_type_names, record.name) {
         None, True ->
           Ok(Problem(
             file: record.file,
@@ -486,10 +486,10 @@ fn check_names(
       }
     })
   let decoder_problems =
-    list.index_map(records, fn(record, index) {
+    index_map(records, fn(record, index) {
       let decoder = record_decoder_name(record)
-      list.take(records, index)
-      |> list.find(fn(earlier) { record_decoder_name(earlier) == decoder })
+      take(records, index)
+      |> find(fn(earlier) { record_decoder_name(earlier) == decoder })
       |> result.map(fn(earlier) {
         Problem(
           file: record.file,
@@ -506,7 +506,7 @@ fn check_names(
     })
     |> result.values
   case
-    list.flatten([
+    flatten([
       function_problems,
       alias_problems,
       field_problems,
@@ -520,7 +520,7 @@ fn check_names(
 }
 
 fn first_file_of_module(unit: Unit, module: String) -> String {
-  list.find(unit.queries, fn(found) {
+  find(unit.queries, fn(found) {
     case found.output {
       RecordOutput(type_name: ModuleType(module: found_module, ..), ..) ->
         found_module == module
@@ -528,14 +528,14 @@ fn first_file_of_module(unit: Unit, module: String) -> String {
     }
   })
   |> result.map(fn(found) { found.file })
-  |> result.unwrap(unit.folder)
+  |> unwrap(unit.folder)
 }
 
 // --- Records ---------------------------------------------------------------
 
 /// The record types that the module decodes, in the order of the files.
 fn unit_records(unit: Unit, imports: List(#(String, String))) -> List(Record) {
-  list.filter_map(unit.queries, fn(found) {
+  filter_map(unit.queries, fn(found) {
     case found.output {
       RecordOutput(type_name:, fields:, line:) -> {
         let #(module, type_base) = qualify(unit, type_name)
@@ -550,9 +550,9 @@ fn unit_records(unit: Unit, imports: List(#(String, String))) -> List(Record) {
       _ -> Error(Nil)
     }
   })
-  |> list.fold([], fn(kept: List(Record), record) {
+  |> fold([], fn(kept: List(Record), record) {
     case
-      list.any(kept, fn(earlier) {
+      any(kept, fn(earlier) {
         earlier.alias == record.alias && earlier.name == record.name
       })
     {
@@ -569,7 +569,7 @@ fn record_alias(
 ) -> Option(String) {
   case module == unit.model.module {
     True -> None
-    False -> list.key_find(imports, module) |> option.from_result
+    False -> key_find(imports, module) |> from_result
   }
 }
 
@@ -581,7 +581,7 @@ fn record_type_text(record: Record) -> String {
 }
 
 fn record_decoder_name(record: Record) -> String {
-  let type_part = name.to_value_name(record.name) |> result.unwrap("record")
+  let type_part = name.to_value_name(record.name) |> unwrap("record")
   case record.alias {
     Some(alias) -> alias <> "_" <> type_part <> "_decoder"
     None -> type_part <> "_decoder"
@@ -595,21 +595,15 @@ fn find_record(
 ) -> Record {
   let #(module, type_base) = qualify(unit, type_name)
   let is_local = module == unit.model.module
-  list.find(records, fn(record) {
+  find(records, fn(record) {
     record.name == type_base && { record.alias == None } == is_local
   })
-  |> result.unwrap(Record(
-    alias: None,
-    name: type_base,
-    fields: [],
-    file: "",
-    line: 1,
-  ))
+  |> unwrap(Record(alias: None, name: type_base, fields: [], file: "", line: 1))
 }
 
 fn render_type(unit: Unit, record: Record) -> Result(String, Nil) {
   let files =
-    list.filter(unit.queries, fn(found) {
+    filter(unit.queries, fn(found) {
       query_type(unit, found) == Ok(#(unit.model.module, record.name))
     })
     |> list.map(fn(found) { file_name(found.file) })
@@ -624,7 +618,7 @@ fn render_type(unit: Unit, record: Record) -> Result(String, Nil) {
         <> " {\n  "
         <> record.name
         <> "("
-        <> list.map(record.fields, field_signature) |> string.join(", ")
+        <> list.map(record.fields, field_signature) |> join(", ")
         <> ")\n}",
       )
   }
@@ -636,7 +630,7 @@ fn render_type(unit: Unit, record: Record) -> Result(String, Nil) {
 /// of its type, or a decoder of its own when its columns decode in another
 /// way (a `-- not null:` promise).
 fn decoder_names(unit: Unit, records: List(Record)) -> List(#(String, String)) {
-  list.filter_map(unit.queries, fn(found) {
+  filter_map(unit.queries, fn(found) {
     case found.output {
       RecordOutput(type_name:, fields:, ..) ->
         Ok(#(
@@ -663,9 +657,7 @@ fn render_decoders(
 ) -> List(String) {
   let used = list.map(decoders, fn(entry) { entry.1 })
   let shared =
-    list.filter(records, fn(record) {
-      list.contains(used, record_decoder_name(record))
-    })
+    filter(records, fn(record) { contains(used, record_decoder_name(record)) })
     |> list.map(fn(record) {
       render_decoder(
         record_decoder_name(record),
@@ -675,8 +667,8 @@ fn render_decoders(
       )
     })
   let own =
-    list.filter_map(unit.queries, fn(found) {
-      let decoder = list.key_find(decoders, found.function)
+    filter_map(unit.queries, fn(found) {
+      let decoder = key_find(decoders, found.function)
       case found.output, decoder {
         RecordOutput(type_name:, fields:, ..), Ok(decoder)
           if decoder == found.function <> "_decoder"
@@ -710,7 +702,7 @@ fn render_decoder(
 
 fn decoder_body(record: Record, fields: List(Field), file: String) -> String {
   let uses =
-    list.index_map(fields, fn(field, index) {
+    index_map(fields, fn(field, index) {
       "  use "
       <> field.name
       <> " <- decode.field("
@@ -724,24 +716,24 @@ fn decoder_body(record: Record, fields: List(Field), file: String) -> String {
     "  decode.success("
     <> record_type_text(record)
     <> "("
-    <> string.join(labels, ", ")
+    <> join(labels, ", ")
     <> "))",
   ])
-  |> string.join("\n")
+  |> join("\n")
 }
 
 fn field_decoder(field: Field, file: String) -> String {
   let column_literal = string_literal(field.column)
   let decoder = case field.elements_promised, field.gleam_type {
-    True, gleam_type.ListType(element) ->
+    True, ListType(element) ->
       "client.promised_elements_not_null("
-      <> gleam_type.decoder_text(element, column_literal)
+      <> decoder_text(element, column_literal)
       <> ", "
       <> string_literal(file)
       <> ", "
       <> column_literal
       <> ")"
-    _, other -> gleam_type.decoder_text(other, column_literal)
+    _, other -> decoder_text(other, column_literal)
   }
   case field.optional, field.promised {
     True, _ -> "decode.optional(" <> decoder <> ")"
@@ -772,21 +764,15 @@ fn render_function(
         argument.name <> ": " <> argument_type_text(argument)
       })
     ]
-    |> string.join(", ")
+    |> join(", ")
   let parameters =
     list.map(found.arguments, fn(argument) {
       "  |> client.parameter("
-      <> gleam_type.encode_call(
-        argument.gleam_type,
-        argument.name,
-        argument.optional,
-      )
+      <> encode_call(argument.gleam_type, argument.name, argument.optional)
       <> ")"
     })
   let numeric = case
-    list.any(output_fields(found), fn(field) {
-      gleam_type.has_numeric(field.gleam_type)
-    })
+    any(output_fields(found), fn(field) { has_numeric(field.gleam_type) })
   {
     True -> ["  |> client.numeric_as_text"]
     False -> []
@@ -800,12 +786,12 @@ fn render_function(
     ]
     RecordOutput(..) -> [
       "  |> client.returning("
-      <> { list.key_find(decoders, found.function) |> result.unwrap("") }
+      <> { key_find(decoders, found.function) |> unwrap("") }
       <> "())",
     ]
   }
   let lines =
-    list.flatten([
+    flatten([
       [
         "/// Generated from " <> file_name(found.file) <> ".",
         "pub fn "
@@ -823,21 +809,21 @@ fn render_function(
       returning,
       ["  |> client.execute(db)", "  |> " <> helper_call(unit, found), "}"],
     ])
-  string.join(lines, "\n")
+  join(lines, "\n")
 }
 
 fn file_name(file: String) -> String {
-  string.split(file, "/") |> list.last |> result.unwrap(file)
+  split(file, "/") |> list.last |> unwrap(file)
 }
 
 fn argument_type_text(argument: Argument) -> String {
-  optional_text(gleam_type.type_text(argument.gleam_type), argument.optional)
+  optional_text(type_text(argument.gleam_type), argument.optional)
 }
 
 fn field_type_text(field: Field) -> String {
   let text = case field.elements_promised, field.gleam_type {
-    True, gleam_type.ListType(element) -> gleam_type.promised_list_text(element)
-    _, other -> gleam_type.type_text(other)
+    True, ListType(element) -> promised_list_text(element)
+    _, other -> type_text(other)
   }
   optional_text(text, field.optional)
 }
@@ -876,7 +862,7 @@ fn helper_call(unit: Unit, found: Query) -> String {
   let query_name =
     string_literal(module_alias(unit.model.module) <> "." <> found.function)
   let unique_list =
-    "[" <> string.join(list.map(found.unique, string_literal), ", ") <> "]"
+    "[" <> join(list.map(found.unique, string_literal), ", ") <> "]"
   helper_of(found) <> "(" <> query_name <> ", " <> unique_list <> ")"
 }
 
@@ -884,9 +870,9 @@ fn helper_call(unit: Unit, found: Query) -> String {
 
 fn render_fingerprint(unit: Unit, hash: String) -> String {
   let tables =
-    list.flat_map(unit.queries, fn(found) { found.relations })
-    |> list.unique
-    |> list.sort(string.compare)
+    flat_map(unit.queries, fn(found) { found.relations })
+    |> unique
+    |> sort(compare)
     |> list.map(string_literal)
   "/// The tables that the functions of this module read and write, and the
 /// fingerprint of their schema when dream_model generated the module. Give
@@ -894,7 +880,7 @@ fn render_fingerprint(unit: Unit, hash: String) -> String {
 /// clear message when the schema changed after the generation.
 pub const schema_fingerprint = client.SchemaFingerprint(
   module: " <> string_literal(unit.model.module) <> ",
-  tables: [" <> string.join(tables, ", ") <> "],
+  tables: [" <> join(tables, ", ") <> "],
   hash: " <> string_literal(hash) <> ",
 )"
 }
@@ -908,8 +894,8 @@ fn render_helpers(used: List(String)) -> List(String) {
     #("many_rows", [many_rows_helper]),
     #("no_rows", [no_rows_helper]),
   ]
-  list.filter(helpers, fn(entry) { list.contains(used, entry.0) })
-  |> list.flat_map(fn(entry) { entry.1 })
+  filter(helpers, fn(entry) { contains(used, entry.0) })
+  |> flat_map(fn(entry) { entry.1 })
   |> list.append([query_error_helper])
 }
 
@@ -1036,24 +1022,24 @@ fn unique_violation(
 pub fn string_literal(text: String) -> String {
   let escaped =
     text
-    |> string.replace("\\", "\\\\")
-    |> string.replace("\"", "\\\"")
+    |> replace("\\", "\\\\")
+    |> replace("\"", "\\\"")
   "\"" <> escaped <> "\""
 }
 
 /// Joins words as a sentence does: `a`, `a and b`, `a, b and c`.
 fn join_words(words: List(String)) -> String {
-  let last = list.length(words) - 1
-  list.index_map(words, fn(word, index) {
+  let last = length(words) - 1
+  index_map(words, fn(word, index) {
     case index {
       0 -> word
       _ if index == last -> " and " <> word
       _ -> ", " <> word
     }
   })
-  |> string.concat
+  |> concat
 }
 
 fn int_text(value: Int) -> String {
-  int.to_string(value)
+  to_string(value)
 }

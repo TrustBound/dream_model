@@ -4,25 +4,32 @@
 ////
 //// Every refusal is a `Problem` that names the file and the line.
 
-import dream_model/generator/fingerprint
+import dream_model/generator/fingerprint.{text_array_literal}
 import dream_model/generator/gleam_type.{type GleamType, type Types}
 import dream_model/generator/name
 import dream_model/generator/query_hint.{
-  type QueryHints, type Returns, type TypeName, LocalType, ReturnsHint,
-  ReturnsMany, ReturnsNone,
+  type NamedLine, type QueryHints, type Returns, type TypeName, type UniqueHint,
+  LocalType, ReturnsHint, ReturnsMany, ReturnsNone, returns_to_string,
 }
 import dream_model/nullability.{
   type Analysis, type AnalysisError, type Analyzer, type Column, type Parameter,
+  HintsRefused, TreeFailed, error_to_string, execute, hint_error_to_string,
 }
-import dream_model/nullability/hint as null_hint
-import dream_model/nullability/reason
-import dream_model/postgres/tree
-import dream_model/postgres/wire
-import gleam/int
-import gleam/list
-import gleam/option.{type Option, None, Some}
-import gleam/result
-import gleam/string
+import dream_model/nullability/hint.{parse_hints}
+import dream_model/nullability/reason.{NotNullHint}
+import dream_model/postgres/tree.{QueryFailed}
+import dream_model/postgres/wire.{ServerError, get_field}
+import gleam/int.{to_string}
+import gleam/list.{
+  any, append, drop, filter, filter_map, find, flat_map, flatten, index_map,
+  last, length, reverse, take, take_while, zip,
+}
+import gleam/option.{type Option, None, Some, lazy_unwrap}
+import gleam/result.{map_error, partition, replace, replace_error, try}
+import gleam/string.{
+  drop_end, ends_with, join, slice, split, starts_with, trim, trim_end,
+  trim_start,
+}
 
 /// A refusal, at a line of a file.
 pub type Problem {
@@ -111,7 +118,7 @@ const decoder_suffix = "_decoder"
 
 fn is_reserved_argument_name(argument_name: String) -> Bool {
   list.contains(reserved_argument_names, argument_name)
-  || string.ends_with(argument_name, decoder_suffix)
+  || ends_with(argument_name, decoder_suffix)
 }
 
 /// Names that a record field cannot take, because the generated decoder
@@ -206,7 +213,7 @@ order by 1, 2"
 
 /// Returns the text of a problem: `file:line: message`.
 pub fn problem_to_string(problem: Problem) -> String {
-  problem.file <> ":" <> int.to_string(problem.line) <> ": " <> problem.message
+  problem.file <> ":" <> to_string(problem.line) <> ": " <> problem.message
 }
 
 /// Describes the generated function of one SQL file. Returns the analyzer
@@ -222,14 +229,14 @@ pub fn analyze(
   let statement_line = statement.0
   let hinted =
     query_hint.parse(sql)
-    |> result.map_error(
+    |> map_error(
       list.map(_, fn(error: query_hint.HintError) {
         Problem(file:, line: error.line, message: error.message)
       }),
     )
   let function =
     function_name(file)
-    |> result.replace_error(problem(
+    |> replace_error(problem(
       1,
       "the file name does not give a Gleam function name; name the file in snake case, for example find_by_email.sql",
     ))
@@ -241,10 +248,7 @@ pub fn analyze(
         function,
         statement.1,
       )
-    _, _ -> #(
-      Error(list.append(error_list(hinted), error_list(function))),
-      analyzer,
-    )
+    _, _ -> #(Error(append(error_list(hinted), error_list(function))), analyzer)
   }
 }
 
@@ -288,20 +292,20 @@ fn describe(
   analysis: Analysis,
 ) -> Result(Query, List(Problem)) {
   let oids =
-    list.append(
+    append(
       list.map(analysis.columns, fn(column) { column.type_oid }),
       list.map(analysis.parameters, fn(parameter) { parameter.type_oid }),
     )
-  use types <- result.try(
+  use types <- try(
     gleam_type.load(analyzer, oids)
-    |> result.map_error(fn(error) { [database_problem(context, error)] }),
+    |> map_error(fn(error) { [database_problem(context, error)] }),
   )
   let columns =
     resolve_columns(context, types, analysis.columns)
-    |> result.try(promise_elements(analyzer, context, analysis.relations, _))
+    |> try(promise_elements(analyzer, context, analysis.relations, _))
   let arguments = resolve_arguments(context, types, analysis.parameters)
   let unique = resolve_unique(analyzer, context, analysis.written_relations)
-  use #(columns, arguments, unique) <- result.try(collect_three(
+  use #(columns, arguments, unique) <- try(collect_three(
     columns,
     arguments,
     unique,
@@ -327,9 +331,7 @@ fn collect_three(
   case first, second, third {
     Ok(first), Ok(second), Ok(third) -> Ok(#(first, second, third))
     _, _, _ ->
-      Error(
-        list.flatten([error_list(first), error_list(second), error_list(third)]),
-      )
+      Error(flatten([error_list(first), error_list(second), error_list(third)]))
   }
 }
 
@@ -337,20 +339,20 @@ fn collect_three(
 
 fn analysis_problems(context: Context, error: AnalysisError) -> List(Problem) {
   case error {
-    nullability.TreeFailed(tree.QueryFailed(wire.ServerError(fields))) -> [
+    TreeFailed(QueryFailed(ServerError(fields))) -> [
       Problem(
         file: context.file,
         line: server_error_line(context, fields),
         message: "PostgreSQL refused the statement: "
-          <> wire.get_field(fields, "M") |> result.unwrap(""),
+          <> get_field(fields, "M") |> result.unwrap(""),
       ),
     ]
-    nullability.HintsRefused(errors) ->
+    HintsRefused(errors) ->
       list.map(errors, fn(hint_error) {
         Problem(
           file: context.file,
           line: hint_error_line(context, hint_error),
-          message: nullability.hint_error_to_string(hint_error),
+          message: hint_error_to_string(hint_error),
         )
       })
     _ -> [database_problem(context, error)]
@@ -361,24 +363,24 @@ fn database_problem(context: Context, error: AnalysisError) -> Problem {
   Problem(
     file: context.file,
     line: context.statement_line,
-    message: nullability.error_to_string(error),
+    message: error_to_string(error),
   )
 }
 
 /// The line of the character position `P` (from 1) of an ErrorResponse.
 fn server_error_line(context: Context, fields: List(#(String, String))) -> Int {
-  wire.get_field(fields, "P")
-  |> result.try(int.parse)
+  get_field(fields, "P")
+  |> try(int.parse)
   |> result.map(fn(position) {
-    string.slice(context.sql, 0, position - 1)
-    |> string.split("\n")
-    |> list.length
+    slice(context.sql, 0, position - 1)
+    |> split("\n")
+    |> length
   })
   |> result.unwrap(context.statement_line)
 }
 
 fn hint_error_line(context: Context, error: nullability.HintError) -> Int {
-  list.find(context.hints.column_names, fn(named) { named.name == error.name })
+  find(context.hints.column_names, fn(named) { named.name == error.name })
   |> result.map(fn(named) { named.line })
   |> result.unwrap(context.statement_line)
 }
@@ -398,7 +400,7 @@ fn resolve_columns(
   list.map(columns, fn(column) {
     gleam_type.resolve(types, column.type_oid)
     |> result.map(TypedColumn(column, _, False))
-    |> result.map_error(fn(type_name) {
+    |> map_error(fn(type_name) {
       Problem(
         file: context.file,
         line: context.statement_line,
@@ -418,9 +420,9 @@ fn resolve_columns(
 fn collect_all(
   found: List(Result(a, Problem)),
 ) -> Result(List(a), List(Problem)) {
-  case result.partition(found) {
-    #(values, []) -> Ok(list.reverse(values))
-    #(_, problems) -> Error(list.reverse(problems))
+  case partition(found) {
+    #(values, []) -> Ok(reverse(values))
+    #(_, problems) -> Error(reverse(problems))
   }
 }
 
@@ -454,7 +456,7 @@ fn decide_output(
       problem(
         line,
         "'returns: "
-          <> query_hint.returns_to_string(returns)
+          <> returns_to_string(returns)
           <> "' needs result columns, and the statement returns none; write 'returns: none'",
       )
     Some(ReturnsHint(returns, None, _)), [single] ->
@@ -468,7 +470,7 @@ fn decide_output(
 
 fn column_list(columns: List(TypedColumn)) -> String {
   list.map(columns, fn(typed) { typed.column.name })
-  |> string.join(", ")
+  |> join(", ")
 }
 
 fn record_output(
@@ -478,8 +480,8 @@ fn record_output(
   columns: List(TypedColumn),
   line: Int,
 ) -> Result(#(Returns, Output), List(Problem)) {
-  use fields <- result.try(
-    list.index_map(columns, fn(typed, index) {
+  use fields <- try(
+    index_map(columns, fn(typed, index) {
       name_field(context, typed, index + 1, line)
     })
     |> collect_all,
@@ -496,11 +498,11 @@ fn name_field(
 ) -> Result(Field, Problem) {
   let problem = fn(message) { Problem(file: context.file, line:, message:) }
   let column = typed.column.name
-  use field_name <- result.try(
+  use field_name <- try(
     name.to_value_name(column)
-    |> result.replace_error(problem(
+    |> replace_error(problem(
       "result column "
-      <> int.to_string(position)
+      <> to_string(position)
       <> " ('"
       <> column
       <> "') has no Gleam name; name it with AS in the SQL, for example AS total",
@@ -525,7 +527,7 @@ fn make_field(typed: TypedColumn, field_name: String) -> Field {
     column: typed.column.name,
     gleam_type: typed.gleam_type,
     optional: !typed.column.not_null,
-    promised: typed.column.reason == reason.NotNullHint,
+    promised: typed.column.reason == NotNullHint,
     elements_promised: typed.elements_promised,
   )
 }
@@ -556,12 +558,12 @@ fn promise_elements(
   use Nil <- result.map(
     list.map(named, check_element_name(analyzer, context, relations, columns, _))
     |> collect_all
-    |> result.replace(Nil),
+    |> replace(Nil),
   )
   list.map(columns, fn(typed) {
     TypedColumn(
       ..typed,
-      elements_promised: list.any(named, fn(hinted) {
+      elements_promised: any(named, fn(hinted) {
         hinted.name == typed.column.name
       }),
     )
@@ -573,13 +575,13 @@ fn check_element_name(
   context: Context,
   relations: List(String),
   columns: List(TypedColumn),
-  hinted: query_hint.NamedLine,
+  hinted: NamedLine,
 ) -> Result(Nil, Problem) {
   let problem = fn(message) {
     Problem(file: context.file, line: hinted.line, message:)
   }
   let start = "hint 'not null elements: " <> hinted.name <> "' "
-  case list.find(columns, fn(typed) { typed.column.name == hinted.name }) {
+  case find(columns, fn(typed) { typed.column.name == hinted.name }) {
     Ok(TypedColumn(gleam_type: gleam_type.ListType(_), ..)) -> Ok(Nil)
     Ok(typed) ->
       Error(problem(
@@ -604,12 +606,12 @@ fn missing_column_text(
   name: String,
 ) -> String {
   let found =
-    nullability.execute(analyzer, relation_column_sql, [
-      Some(fingerprint.text_array_literal(relations)),
+    execute(analyzer, relation_column_sql, [
+      Some(text_array_literal(relations)),
       Some(name),
     ])
     |> result.unwrap([])
-    |> list.flat_map(option.values)
+    |> flat_map(option.values)
   let result_text = case columns {
     [] -> "the statement returns no columns"
     _ -> "the result columns are " <> column_list(columns)
@@ -618,7 +620,7 @@ fn missing_column_text(
     [] -> "names an unknown column; " <> result_text
     tables ->
       "names "
-      <> string.join(tables, ", ")
+      <> join(tables, ", ")
       <> ", which is not in the result of the statement; return it, or remove it from the hint ("
       <> result_text
       <> ")"
@@ -647,10 +649,8 @@ fn check_duplicate_fields(
 }
 
 fn first_duplicate(names: List(String)) -> Result(String, Nil) {
-  list.index_map(names, fn(found, index) {
-    #(found, list.drop(names, index + 1))
-  })
-  |> list.find(fn(pair) { list.contains(pair.1, pair.0) })
+  index_map(names, fn(found, index) { #(found, drop(names, index + 1)) })
+  |> find(fn(pair) { list.contains(pair.1, pair.0) })
   |> result.map(fn(pair) { pair.0 })
 }
 
@@ -668,34 +668,34 @@ fn resolve_unique(
     _,
   ))
   |> collect_all
-  |> result.map(list.flatten)
+  |> result.map(flatten)
 }
 
 fn resolve_unique_hint(
   analyzer: Analyzer,
   context: Context,
   written: List(String),
-  hint: query_hint.UniqueHint,
+  hint: UniqueHint,
 ) -> Result(List(String), Problem) {
   let problem = fn(message) {
     Problem(file: context.file, line: hint.line, message:)
   }
   use <- refuse_when_nothing_written(written, problem)
-  use rows <- result.try(
-    nullability.execute(analyzer, unique_sql, [
-      Some(fingerprint.text_array_literal(written)),
+  use rows <- try(
+    execute(analyzer, unique_sql, [
+      Some(text_array_literal(written)),
       Some(hint.constraint),
     ])
-    |> result.map_error(nullability.error_to_string)
-    |> result.map_error(problem),
+    |> map_error(error_to_string)
+    |> map_error(problem),
   )
-  case list.flat_map(rows, option.values) {
+  case flat_map(rows, option.values) {
     [] ->
       Error(problem(
         "'"
         <> hint.constraint
         <> "' is not a unique constraint, a primary key or a unique index of "
-        <> string.join(written, ", "),
+        <> join(written, ", "),
       ))
     names -> {
       use Nil <- result.map(refuse_same_name(analyzer, written, hint, problem))
@@ -710,16 +710,16 @@ fn resolve_unique_hint(
 fn refuse_same_name(
   analyzer: Analyzer,
   written: List(String),
-  hint: query_hint.UniqueHint,
+  hint: UniqueHint,
   problem: fn(String) -> Problem,
 ) -> Result(Nil, Problem) {
-  use rows <- result.try(
-    nullability.execute(analyzer, same_name_sql, [
-      Some(fingerprint.text_array_literal(written)),
+  use rows <- try(
+    execute(analyzer, same_name_sql, [
+      Some(text_array_literal(written)),
       Some(hint.constraint),
     ])
-    |> result.map_error(nullability.error_to_string)
-    |> result.map_error(problem),
+    |> map_error(error_to_string)
+    |> map_error(problem),
   )
   let hinted = descriptions_of(rows, "hinted")
   case descriptions_of(rows, "other") {
@@ -729,9 +729,9 @@ fn refuse_same_name(
         "the name '"
         <> hint.constraint
         <> "' belongs to "
-        <> string.join(hinted, " and ")
+        <> join(hinted, " and ")
         <> ", and also to "
-        <> string.join(others, " and ")
+        <> join(others, " and ")
         <> "; PostgreSQL names a violation only by the name of its constraint, so a violation of the other object would give this Conflict; rename one of them",
       ))
   }
@@ -741,7 +741,7 @@ fn descriptions_of(
   rows: List(List(Option(String))),
   role: String,
 ) -> List(String) {
-  list.filter_map(rows, fn(row) {
+  filter_map(rows, fn(row) {
     case row {
       [Some(found_role), Some(description)] if found_role == role ->
         Ok(description)
@@ -775,8 +775,8 @@ fn resolve_arguments(
   let typed =
     list.map(parameters, fn(parameter) {
       gleam_type.resolve(types, parameter.type_oid)
-      |> result.map_error(fn(type_name) {
-        let placeholder = "$" <> int.to_string(parameter.position)
+      |> map_error(fn(type_name) {
+        let placeholder = "$" <> to_string(parameter.position)
         Problem(
           file: context.file,
           line: parameter_line(context, parameter.position),
@@ -792,11 +792,11 @@ fn resolve_arguments(
       })
     })
     |> collect_all
-    |> result.try(refuse_numeric_arrays(context, parameters, _))
+    |> try(refuse_numeric_arrays(context, parameters, _))
   case named, typed {
     Ok(names), Ok(types) ->
       Ok(
-        list.zip(parameters, list.zip(names, types))
+        zip(parameters, zip(names, types))
         |> list.map(fn(entry) {
           let #(parameter, #(argument_name, gleam_type)) = entry
           Argument(
@@ -806,7 +806,7 @@ fn resolve_arguments(
           )
         }),
       )
-    _, _ -> Error(list.append(error_list(named), error_list(typed)))
+    _, _ -> Error(append(error_list(named), error_list(typed)))
   }
 }
 
@@ -818,13 +818,13 @@ fn refuse_numeric_arrays(
   parameters: List(Parameter),
   types: List(GleamType),
 ) -> Result(List(GleamType), List(Problem)) {
-  list.zip(parameters, types)
+  zip(parameters, types)
   |> list.map(fn(pair) {
     case pair {
       #(parameter, gleam_type.ListType(element)) ->
         case gleam_type.has_numeric(element) {
           True -> {
-            let placeholder = "$" <> int.to_string(parameter.position)
+            let placeholder = "$" <> to_string(parameter.position)
             Error(Problem(
               file: context.file,
               line: parameter_line(context, parameter.position),
@@ -847,8 +847,8 @@ fn name_parameters(
   context: Context,
   parameters: List(Parameter),
 ) -> Result(List(String), List(Problem)) {
-  case null_hint.parse_hints(context.sql).parameters {
-    Some(names) -> names_from_hint(context, names, list.length(parameters))
+  case parse_hints(context.sql).parameters {
+    Some(names) -> names_from_hint(context, names, length(parameters))
     None -> names_from_columns(context, parameters)
   }
 }
@@ -863,16 +863,16 @@ fn names_from_hint(
   let problem = fn(message) { Problem(file: context.file, line:, message:) }
   let checked =
     list.map(names, fn(hinted) {
-      let argument_name = case string.ends_with(hinted, "?") {
-        True -> string.drop_end(hinted, 1)
+      let argument_name = case ends_with(hinted, "?") {
+        True -> drop_end(hinted, 1)
         False -> hinted
       }
       check_hinted_name(argument_name, problem)
     })
     |> collect_all
-  use names <- result.try(checked)
-  use <- refuse_count(count, list.length(names), problem)
-  check_unique_names(context, names, Some(line), string.join(names, ", "))
+  use names <- try(checked)
+  use <- refuse_count(count, length(names), problem)
+  check_unique_names(context, names, Some(line), join(names, ", "))
 }
 
 fn refuse_count(
@@ -887,9 +887,9 @@ fn refuse_count(
       Error([
         problem(
           "the 'params' hint names "
-          <> int.to_string(hinted)
+          <> to_string(hinted)
           <> " parameters, and the statement has "
-          <> int.to_string(count)
+          <> to_string(count)
           <> "; name every parameter, in order",
         ),
       ])
@@ -924,7 +924,7 @@ fn names_from_columns(
   parameters: List(Parameter),
 ) -> Result(List(String), List(Problem)) {
   let suggestion = suggest_names(parameters)
-  use names <- result.try(
+  use names <- try(
     list.map(parameters, name_from_columns(context, _, suggestion))
     |> collect_all,
   )
@@ -945,12 +945,12 @@ fn suggest_names(parameters: List(Parameter)) -> String {
       }
       #(base, parameter)
     })
-  list.index_map(bases, fn(pair, index) {
+  index_map(bases, fn(pair, index) {
     let #(base, parameter) = pair
-    let position = int.to_string(parameter.position)
+    let position = to_string(parameter.position)
     let taken =
-      list.take(bases, index)
-      |> list.any(fn(earlier) { earlier.0 == base })
+      take(bases, index)
+      |> any(fn(earlier) { earlier.0 == base })
     let suggested = case base, taken {
       "", _ -> "value_" <> position
       _, True -> base <> "_" <> position
@@ -961,7 +961,7 @@ fn suggest_names(parameters: List(Parameter)) -> String {
       False -> suggested
     }
   })
-  |> string.join(", ")
+  |> join(", ")
 }
 
 fn name_from_columns(
@@ -969,7 +969,7 @@ fn name_from_columns(
   parameter: Parameter,
   suggestion: String,
 ) -> Result(String, Problem) {
-  let placeholder = "$" <> int.to_string(parameter.position)
+  let placeholder = "$" <> to_string(parameter.position)
   let problem = fn(message) {
     Problem(
       file: context.file,
@@ -996,7 +996,7 @@ fn name_from_columns(
         "the parameter "
         <> placeholder
         <> " is used with the columns "
-        <> string.join(columns, " and ")
+        <> join(columns, " and ")
         <> ", so its name is not clear",
       ))
   }
@@ -1038,13 +1038,11 @@ fn check_unique_names(
 ) -> Result(List(String), List(Problem)) {
   use duplicate <- result_to_refusal(first_duplicate(names), names)
   let positions =
-    list.index_map(names, fn(argument_name, index) {
-      #(argument_name, index + 1)
-    })
-    |> list.filter(fn(pair) { pair.0 == duplicate })
+    index_map(names, fn(argument_name, index) { #(argument_name, index + 1) })
+    |> filter(fn(pair) { pair.0 == duplicate })
     |> list.map(fn(pair) { pair.1 })
   let line =
-    option.lazy_unwrap(hint_line, fn() {
+    lazy_unwrap(hint_line, fn() {
       parameter_line(context, list.first(positions) |> result.unwrap(1))
     })
   Error([
@@ -1052,8 +1050,8 @@ fn check_unique_names(
       file: context.file,
       line:,
       message: "the parameters "
-        <> string.join(
-        list.map(positions, fn(position) { "$" <> int.to_string(position) }),
+        <> join(
+        list.map(positions, fn(position) { "$" <> to_string(position) }),
         " and ",
       )
         <> " would all be named '"
@@ -1080,11 +1078,11 @@ fn result_to_refusal(
 
 /// The line of the first `$n` of the SQL, outside comment lines.
 fn parameter_line(context: Context, position: Int) -> Int {
-  let placeholder = "$" <> int.to_string(position)
-  string.split(context.sql, "\n")
-  |> list.index_map(fn(text, index) { #(text, index + 1) })
-  |> list.find(fn(pair) {
-    !string.starts_with(string.trim_start(pair.0), "--")
+  let placeholder = "$" <> to_string(position)
+  split(context.sql, "\n")
+  |> index_map(fn(text, index) { #(text, index + 1) })
+  |> find(fn(pair) {
+    !starts_with(trim_start(pair.0), "--")
     && has_placeholder(pair.0, placeholder)
   })
   |> result.map(fn(pair) { pair.1 })
@@ -1092,10 +1090,10 @@ fn parameter_line(context: Context, position: Int) -> Int {
 }
 
 fn has_placeholder(text: String, placeholder: String) -> Bool {
-  string.split(text, placeholder)
-  |> list.drop(1)
-  |> list.any(fn(after) {
-    !string.contains("0123456789", string.slice(after, 0, 1)) || after == ""
+  split(text, placeholder)
+  |> drop(1)
+  |> any(fn(after) {
+    !string.contains("0123456789", slice(after, 0, 1)) || after == ""
   })
 }
 
@@ -1104,27 +1102,27 @@ fn has_placeholder(text: String, placeholder: String) -> Bool {
 /// Returns the function name of a SQL file path: its file name without
 /// `.sql`, in snake case.
 pub fn function_name(file: String) -> Result(String, Nil) {
-  string.split(file, "/")
-  |> list.last
-  |> result.map(fn(base) { string.drop_end(base, 4) })
-  |> result.try(name.to_value_name)
+  split(file, "/")
+  |> last
+  |> result.map(fn(base) { drop_end(base, 4) })
+  |> try(name.to_value_name)
 }
 
 /// Returns the line number of the first line after the comment and blank
 /// lines at the top, and the SQL from that line, without trailing
 /// whitespace.
 pub fn strip_leading_comments(sql: String) -> #(Int, String) {
-  let lines = string.split(sql, "\n")
+  let lines = split(sql, "\n")
   let skipped =
-    list.take_while(lines, fn(text) {
-      let trimmed = string.trim(text)
-      trimmed == "" || string.starts_with(trimmed, "--")
+    take_while(lines, fn(text) {
+      let trimmed = trim(text)
+      trimmed == "" || starts_with(trimmed, "--")
     })
-    |> list.length
+    |> length
   #(
     skipped + 1,
-    list.drop(lines, skipped)
-      |> string.join("\n")
-      |> string.trim_end,
+    drop(lines, skipped)
+      |> join("\n")
+      |> trim_end,
   )
 }

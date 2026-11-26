@@ -5,8 +5,8 @@ import dream_errors.{
   type Error, Conflict, Failed, NotFound, Timeout, Unavailable,
 }
 import dream_postgres/client.{
-  type Connection, type QueryError, type Returned, SchemaFingerprint, bool,
-  broken_promise, execute, infinite_value, int, more_than_one_row, nullable,
+  type Connection, type QueryError, type Returned, SchemaFingerprint,
+  broken_promise, execute, infinite_value, more_than_one_row, nullable,
   parameter, promised_not_null, query, returning, text, to_error,
   violated_constraint,
 }
@@ -46,7 +46,7 @@ from users join posts on posts.user_id = users.id
 where posts.published = $1
 order by users.id"
   |> query
-  |> parameter(bool(published))
+  |> parameter(client.bool(published))
   |> returning(user_user_decoder())
   |> execute(db)
   |> many_rows("post.authors", [])
@@ -60,7 +60,7 @@ pub fn by_user(
   "select id, user_id, title, body, published from posts
 where user_id = $1 order by id"
   |> query
-  |> parameter(int(user_id))
+  |> parameter(client.int(user_id))
   |> returning(post_decoder())
   |> execute(db)
   |> many_rows("post.by_user", [])
@@ -76,7 +76,7 @@ pub fn create(
   "insert into posts (user_id, title, body) values ($1, $2, $3)
 returning id, user_id, title, body, published"
   |> query
-  |> parameter(int(user_id))
+  |> parameter(client.int(user_id))
   |> parameter(text(title))
   |> parameter(nullable(text, body))
   |> returning(post_decoder())
@@ -91,7 +91,7 @@ pub fn publish(
 ) -> Result(Option(Bool), Error(QueryError)) {
   "update posts set published = true where id = $1 returning published"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(at([0], decode.bool))
   |> execute(db)
   |> maybe_row("post.publish", [])
@@ -112,7 +112,7 @@ pub fn titles(
 pub fn total(db: Connection, user_id: Int) -> Result(Int, Error(QueryError)) {
   "select sum(id)::int as total from posts where user_id = $1"
   |> query
-  |> parameter(int(user_id))
+  |> parameter(client.int(user_id))
   |> returning(at(
     [0],
     promised_not_null(decode.int, "src/app/models/post/total.sql", "total"),

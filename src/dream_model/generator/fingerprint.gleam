@@ -5,12 +5,12 @@
 //// The SQL is `client.schema_fingerprint_sql` of dream_postgres, run with
 //// dream_model's own connection, so both sides read the same facts.
 
-import dream_model/nullability.{type AnalysisError, type Analyzer}
-import dream_postgres/client
-import gleam/list
-import gleam/option.{Some}
+import dream_model/nullability.{type AnalysisError, type Analyzer, execute}
+import dream_postgres/client.{schema_fingerprint_sql}
+import gleam/list.{flat_map}
+import gleam/option.{Some, values}
 import gleam/result
-import gleam/string
+import gleam/string.{concat, join, replace}
 
 @external(erlang, "dream_model_ffi", "sha256_hex")
 fn sha256_hex(text: String) -> String
@@ -22,13 +22,13 @@ pub fn compute(
   tables: List(String),
 ) -> Result(String, AnalysisError) {
   use rows <- result.map(
-    nullability.execute(analyzer, client.schema_fingerprint_sql, [
+    execute(analyzer, schema_fingerprint_sql, [
       Some(text_array_literal(tables)),
     ]),
   )
   // The query always gives one row with one text.
-  list.flat_map(rows, option.values)
-  |> string.concat
+  flat_map(rows, values)
+  |> concat
   |> sha256_hex
 }
 
@@ -39,9 +39,9 @@ pub fn text_array_literal(items: List(String)) -> String {
     list.map(items, fn(item) {
       let escaped =
         item
-        |> string.replace("\\", "\\\\")
-        |> string.replace("\"", "\\\"")
+        |> replace("\\", "\\\\")
+        |> replace("\"", "\\\"")
       "\"" <> escaped <> "\""
     })
-  "{" <> string.join(quoted, ",") <> "}"
+  "{" <> join(quoted, ",") <> "}"
 }

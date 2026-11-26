@@ -1,16 +1,16 @@
 //// Tests for `dream_model/generator/name`.
 
-import dream_model/generator/name
+import dream_model/generator/name.{avoid_keyword, to_type_name, to_value_name}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import gleam/list
+import gleam/list.{map}
 
 pub fn tests() -> TestSuite {
   describe("dream_model/generator/name", [
     group(
       "to_value_name",
-      list.map(
+      map(
         [
           #("email", Ok("email")),
           #("createdAt", Ok("created_at")),
@@ -29,7 +29,7 @@ pub fn tests() -> TestSuite {
             "gives " <> string_of(expected) <> " for '" <> sql_name <> "'",
             fn() {
               // Act
-              let found = name.to_value_name(sql_name)
+              let found = to_value_name(sql_name)
 
               // Assert
               found
@@ -44,7 +44,7 @@ pub fn tests() -> TestSuite {
     group("to_type_name", [
       it("gives UserAccount for user_account", fn() {
         // Act
-        let found = name.to_type_name("user_account")
+        let found = to_type_name("user_account")
 
         // Assert
         found
@@ -56,7 +56,7 @@ pub fn tests() -> TestSuite {
     group("avoid_keyword", [
       it("adds _ to a keyword", fn() {
         // Act
-        let found = name.avoid_keyword("use")
+        let found = avoid_keyword("use")
 
         // Assert
         found
@@ -66,7 +66,7 @@ pub fn tests() -> TestSuite {
       }),
       it("keeps a name that is not a keyword", fn() {
         // Act
-        let found = name.avoid_keyword("user")
+        let found = avoid_keyword("user")
 
         // Assert
         found

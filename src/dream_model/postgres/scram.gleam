@@ -5,11 +5,13 @@
 //// The functions here only compute messages. `dream_model/postgres/wire`
 //// sends them.
 
-import gleam/bit_array
-import gleam/int
-import gleam/list
-import gleam/result
-import gleam/string
+import gleam/bit_array.{
+  append, base16_encode, base64_decode, base64_encode, from_string,
+}
+import gleam/int.{parse, to_string}
+import gleam/list.{filter_map, key_find}
+import gleam/result.{replace_error, try}
+import gleam/string.{lowercase, split, split_once, starts_with}
 
 /// A server message that the SCRAM exchange cannot accept.
 pub type ScramError {
@@ -80,7 +82,7 @@ pub const gs2_header = "n,,"
 /// Returns a new random client nonce: 18 random bytes in base64.
 pub fn create_nonce() -> String {
   strong_random_bytes(18)
-  |> bit_array.base64_encode(True)
+  |> base64_encode(True)
 }
 
 /// Returns the client-first message without its GS2 header. PostgreSQL
@@ -99,16 +101,16 @@ pub fn client_final_message(
   client_nonce client_nonce: String,
   server_first server_first: String,
 ) -> Result(ClientFinal, ScramError) {
-  use attributes <- result.try(parse_server_first(server_first))
+  use attributes <- try(parse_server_first(server_first))
   let #(server_nonce, salt, iterations) = attributes
-  use Nil <- result.try(check_nonce(server_nonce, client_nonce))
+  use Nil <- try(check_nonce(server_nonce, client_nonce))
   let salted_password =
-    pbkdf2_hmac(Sha256, bit_array.from_string(password), salt, iterations, 32)
+    pbkdf2_hmac(Sha256, from_string(password), salt, iterations, 32)
   let client_key = hmac(salted_password, "Client Key")
   let stored_key = hash(Sha256, client_key)
   let without_proof =
     "c="
-    <> bit_array.base64_encode(bit_array.from_string(gs2_header), True)
+    <> base64_encode(from_string(gs2_header), True)
     <> ",r="
     <> server_nonce
   let authentication_message =
@@ -117,7 +119,7 @@ pub fn client_final_message(
   let proof = exclusive_or(client_key, client_signature)
   let server_key = hmac(salted_password, "Server Key")
   Ok(ClientFinal(
-    message: without_proof <> ",p=" <> bit_array.base64_encode(proof, True),
+    message: without_proof <> ",p=" <> base64_encode(proof, True),
     server_signature: hmac(server_key, authentication_message),
   ))
 }
@@ -142,8 +144,8 @@ pub fn md5_password(
   password password: String,
   salt salt: BitArray,
 ) -> String {
-  let inner = md5_hex(bit_array.from_string(password <> user))
-  "md5" <> md5_hex(bit_array.append(bit_array.from_string(inner), salt))
+  let inner = md5_hex(from_string(password <> user))
+  "md5" <> md5_hex(append(from_string(inner), salt))
 }
 
 /// Returns a readable message for a SCRAM error.
@@ -158,28 +160,28 @@ pub fn error_to_string(error: ScramError) -> String {
     ServerRejected(reason) -> "the server rejected the SCRAM proof: " <> reason
     TooManyIterations(iterations) ->
       "the server asks for "
-      <> int.to_string(iterations)
+      <> to_string(iterations)
       <> " SCRAM iterations, and dream_model computes at most "
-      <> int.to_string(maximum_iterations)
+      <> to_string(maximum_iterations)
       <> "; lower scram_iterations on the server and set the password again"
   }
 }
 
 fn md5_hex(data: BitArray) -> String {
   hash(Md5, data)
-  |> bit_array.base16_encode
-  |> string.lowercase
+  |> base16_encode
+  |> lowercase
 }
 
 fn hmac(key: BitArray, data: String) -> BitArray {
-  mac(Hmac, Sha256, key, bit_array.from_string(data))
+  mac(Hmac, Sha256, key, from_string(data))
 }
 
 fn check_signature(
   encoded: String,
   expected: BitArray,
 ) -> Result(Nil, ScramError) {
-  case bit_array.base64_decode(encoded) == Ok(expected) {
+  case base64_decode(encoded) == Ok(expected) {
     True -> Ok(Nil)
     False -> Error(ServerSignatureMismatch)
   }
@@ -189,10 +191,7 @@ fn check_nonce(
   server_nonce: String,
   client_nonce: String,
 ) -> Result(Nil, ScramError) {
-  case
-    string.starts_with(server_nonce, client_nonce)
-    && server_nonce != client_nonce
-  {
+  case starts_with(server_nonce, client_nonce) && server_nonce != client_nonce {
     True -> Ok(Nil)
     False -> Error(NonceMismatch)
   }
@@ -202,21 +201,19 @@ fn parse_server_first(
   message: String,
 ) -> Result(#(String, BitArray, Int), ScramError) {
   let attributes =
-    string.split(message, ",")
-    |> list.filter_map(string.split_once(_, "="))
+    split(message, ",")
+    |> filter_map(split_once(_, "="))
   let malformed = MalformedServerMessage(message)
-  use nonce <- result.try(
-    list.key_find(attributes, "r") |> result.replace_error(malformed),
+  use nonce <- try(key_find(attributes, "r") |> replace_error(malformed))
+  use salt <- try(
+    key_find(attributes, "s")
+    |> try(base64_decode)
+    |> replace_error(malformed),
   )
-  use salt <- result.try(
-    list.key_find(attributes, "s")
-    |> result.try(bit_array.base64_decode)
-    |> result.replace_error(malformed),
-  )
-  use iterations <- result.try(
-    list.key_find(attributes, "i")
-    |> result.try(int.parse)
-    |> result.replace_error(malformed),
+  use iterations <- try(
+    key_find(attributes, "i")
+    |> try(parse)
+    |> replace_error(malformed),
   )
   case iterations > 0, iterations > maximum_iterations {
     False, _ -> Error(malformed)

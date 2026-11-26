@@ -33,7 +33,7 @@ select id, email, nickname from users where id = $1
 pub fn find(db: Connection, id: Int) -> Result(User, Error(QueryError)) {
   "select id, email, nickname from users where id = $1"
   |> query
-  |> parameter(int(id))
+  |> parameter(client.int(id))
   |> returning(user_decoder())
   |> execute(db)
   |> one_row("user.find", [])
@@ -82,13 +82,13 @@ A `timestamp`, `timestamptz` or `date` value of `infinity` gives `Failed` with a
 
 ```gleam
 /// Compares the schema fingerprint of each model with the database.
-pub fn check_models(db: client.Connection) -> Result(Nil, String) {
-  client.check_schema(db, [
+pub fn check_models(db: Connection) -> Result(Nil, String) {
+  check_schema(db, [
     user.schema_fingerprint,
     post.schema_fingerprint,
     sample.schema_fingerprint,
   ])
-  |> result.map_error(client.format_schema_check_error)
+  |> map_error(format_schema_check_error)
 }
 ```
 

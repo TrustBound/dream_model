@@ -2,8 +2,8 @@
 //// that a real server never sends: other authentication methods, TLS, and
 //// malformed messages.
 
-import gleam/bit_array
-import gleam/int
+import gleam/bit_array.{byte_size}
+import gleam/int.{to_string}
 
 /// One step of the script.
 pub type Step {
@@ -40,7 +40,7 @@ pub fn start(steps: List(Step)) -> String {
 /// and runs the script on it. Returns its URL.
 pub fn start_for_connections(scripts: List(List(Step))) -> String {
   "postgresql://dream:secret@127.0.0.1:"
-  <> int.to_string(start_fake_server(scripts))
+  <> to_string(start_fake_server(scripts))
   <> "/fake"
 }
 
@@ -52,7 +52,7 @@ pub fn start_with_query(steps: List(Step), query: String) -> String {
 
 /// Returns a backend message.
 pub fn message(kind: String, body: BitArray) -> BitArray {
-  <<kind:utf8, { bit_array.byte_size(body) + 4 }:32, body:bits>>
+  <<kind:utf8, { byte_size(body) + 4 }:32, body:bits>>
 }
 
 /// AuthenticationOk
