@@ -84,8 +84,25 @@ copy_dream_postgres() {
   for name in $dream_postgres_packages; do
     from="$dream_postgres_source/build/packages/$name"
     copy_package "$from" "$1" "$name"
-    list_package "$1" "$name" "$(version_of_hex "$dream_postgres_source" "$name")"
+    list_package "$1" "$name" "$(version_of_copy "$dream_postgres_source" "$1/$name" "$name")"
   done
+}
+
+# version_of_copy <project folder> <package folder> <name>: the version in
+# the manifest of the project, or else the version in the gleam.toml of the
+# copied package. The manifest of a dream_postgres checkout can lack a
+# package (for example dream_errors before it is on Hex). An empty version
+# in packages.toml breaks the build, so the script stops when it finds none.
+version_of_copy() {
+  version="$(version_of_hex "$1" "$3")"
+  if [ -z "$version" ] && [ -f "$2/gleam.toml" ]; then
+    version="$(version_of "$2")"
+  fi
+  if [ -z "$version" ]; then
+    echo "No version for $3: not in $1/manifest.toml and no $2/gleam.toml" >&2
+    exit 1
+  fi
+  printf '%s\n' "$version"
 }
 
 # version_of_hex <project folder> <name>: the version in the manifest
