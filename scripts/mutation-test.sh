@@ -611,18 +611,35 @@ mutant "unique hint: refuse an ambiguous name" "16" "$generator_query" \
 # --- Model errors as data ------------------------------------------------------
 
 mutant "model error: no row is NotFound" "16" "$model" \
-  '[] -> Error(client.NotFound)' \
+  '[] -> Error(dream_errors.NotFound(query_name <> \" found no row\"))' \
   '[] -> Ok(panic)' \
   "test/dream_model/generator/model_test.gleam"
 
 mutant "model error: a hinted unique violation is Conflict" "16" "$model" \
-  'Ok(constraint), _, _ -> client.Conflict(constraint)' \
-  'Ok(constraint), _, _ -> client.QueryFailed(constraint, query_error)' \
+  'Ok(_), _, _, _ -> dream_errors.Conflict(described, query_error)' \
+  'Ok(_), _, _, _ -> dream_errors.Failed(described, query_error)' \
   "test/dream_model/generator/model_test.gleam"
 
-mutant "model error: QueryFailed keeps the cause" "16" "$model" \
-  'client.QueryFailed(query_name <> \" failed\", query_error)' \
-  'client.QueryFailed(query_name <> \" failed\", client.more_than_one_row(0))' \
+mutant "model error: Conflict keeps the cause" "16" "$model" \
+  'Ok(_), _, _, _ -> dream_errors.Conflict(described, query_error)' \
+  'Ok(_), _, _, _ -> dream_errors.Conflict(described, client.more_than_one_row(0))' \
+  "test/dream_model/generator/model_test.gleam"
+
+mutant "model error: a timeout is Timeout" "16" "$model" \
+  'dream_errors.Timeout(described, query_error)' \
+  'dream_errors.Failed(described, query_error)' \
+  "test/dream_model/generator/model_test.gleam"
+
+mutant "model error: no connection is Unavailable" "16" "$model" \
+  'dream_errors.Unavailable(described, query_error)' \
+  'dream_errors.Failed(described, query_error)' \
+  "test/dream_model/generator/model_test.gleam"
+
+mutant "model error: Failed keeps the cause" "16" "$model" \
+  'Error(Nil), Error(Nil), Error(Nil), _ ->
+      dream_errors.Failed(described, query_error)' \
+  'Error(Nil), Error(Nil), Error(Nil), _ ->
+      dream_errors.Failed(described, client.more_than_one_row(0))' \
   "test/dream_model/generator/model_test.gleam"
 
 mutant "model error: unique hints reach the helper" "16" "$model" \

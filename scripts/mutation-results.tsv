@@ -16,16 +16,19 @@ grouping sets empty a column	17	cd299049a5a6f9b2	a48fefc	killed	10	own modules
 grouping-expression hazard	16	84f448ad8e1fb7a1	a48fefc	killed	16	own modules
 hints: only the comment block at the top	16	23df97be82047ea2	a48fefc	killed	2	own modules
 inheritance child tables	18	6ac5a8518cfc8e32	a48fefc	killed	4	own modules
-model error hints: refuse the old not found hint	16	b2a1e6fc6b85370b	ad8e317+changes	killed	1	own modules
-model error hints: refuse the old unique hint	16	b2a1e6fc6b85370b	ad8e317+changes	killed	2	own modules
-model error: QueryFailed keeps the cause	16	26d87ccf2fd15655	ad8e317+changes	killed	1	own modules
-model error: a hinted unique violation is Conflict	16	26d87ccf2fd15655	ad8e317+changes	killed	1	own modules
-model error: no row is NotFound	16	df61dd57556edbc8	ad8e317+changes	killed	1	own modules
-model error: unique hints reach the helper	16	d183b32f3dd0d870	ad8e317+changes	killed	3	own modules
-names: one decoder for two types	16	94dd39ecbf4422f4	ad8e317+changes	killed	1	own modules
+model error hints: refuse the old not found hint	16	e4df22fad095b903	26b3add+changes	killed	1	own modules
+model error hints: refuse the old unique hint	16	e4df22fad095b903	26b3add+changes	killed	2	own modules
+model error: Conflict keeps the cause	16	4287212758fe14d8	26b3add+changes	killed	1	own modules
+model error: Failed keeps the cause	16	4287212758fe14d8	26b3add+changes	killed	1	own modules
+model error: a hinted unique violation is Conflict	16	4287212758fe14d8	26b3add+changes	killed	1	own modules
+model error: a timeout is Timeout	16	4287212758fe14d8	26b3add+changes	killed	1	own modules
+model error: no connection is Unavailable	16	4287212758fe14d8	26b3add+changes	killed	1	own modules
+model error: no row is NotFound	16	3ed8bf13a660b4fa	26b3add+changes	killed	1	own modules
+model error: unique hints reach the helper	16	5508b147ffee8287	26b3add+changes	killed	3	own modules
+names: one decoder for two types	16	106b4fb2c568c02e	26b3add+changes	killed	1	own modules
 names: parameter of a decoder	16	9699c743de856863	ad8e317+changes	killed	1	own modules
 names: parameter of a helper	16	9699c743de856863	ad8e317+changes	killed	1	own modules
-names: reserved type names	16	94dd39ecbf4422f4	ad8e317+changes	killed	2	own modules
+names: reserved type names	16	106b4fb2c568c02e	26b3add+changes	killed	2	own modules
 never-NULL EXISTS: off	16	b06a15ce3f7c85b5	a48fefc	killed	1	own modules
 never-NULL EXISTS: only EXISTS sublinks	16	b06a15ce3f7c85b5	a48fefc	killed	6	own modules
 never-NULL IS DISTINCT FROM: built-in only	16	b06a15ce3f7c85b5	a48fefc	killed	2	own modules
@@ -39,12 +42,12 @@ never-NULL count: off	16	b06a15ce3f7c85b5	a48fefc	killed	7	own modules
 never-NULL count: only count	16	b06a15ce3f7c85b5	a48fefc	killed	6	own modules
 never-NULL count: only pg_catalog count	16	b902f35b28fe8674	a48fefc	killed	4	own modules
 not null elements: any column type	16	8f439220033fb12b	ad8e317+changes	killed	1	own modules
-not null elements: hint ignored	16	959adf2f00531637	ad8e317+changes	killed	8	own modules
-not null elements: no check of each element	16	2283854790e37dcc	ad8e317+changes	killed	4	own modules
+not null elements: hint ignored	16	28669df74d1d8ae2	26b3add+changes	killed	8	own modules
+not null elements: no check of each element	16	2a19f22b0e250635	26b3add+changes	killed	4	own modules
 numeric: Float decoder	16	edc629914337e73a	a48fefc	killed	1	own modules
 numeric: Float value function	16	1742e22af51f5840	a48fefc	killed	3	own modules
 numeric: numeric[] parameter allowed	16	7787ce2c1dfa8088	ad8e317+changes	killed	1	own modules
-numeric: numeric_as_text left off	16	70c83cbd48e512e6	ad8e317+changes	killed	4	own modules
+numeric: numeric_as_text left off	16	79afce3697f1a7a8	26b3add+changes	killed	4	own modules
 outer-join nulling (varnullingrels)	16	cd299049a5a6f9b2	a48fefc	killed	66	own modules
 parameter store: any function is pass-through	16	1430c384a197a153	a48fefc	killed	1	own modules
 parameter store: column NOT NULL	16	21c407f521e3a1bb	a48fefc	killed	28	own modules

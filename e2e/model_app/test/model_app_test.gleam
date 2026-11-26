@@ -9,11 +9,12 @@ import app/models/sample
 import app/models/user
 import app/startup
 import dream/http/response
+import dream_errors
 import dream_postgres/client
 import gleam/int
 import gleam/io
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/time/calendar
@@ -67,19 +68,36 @@ fn show_response(label: String, found: response.Response) -> Nil {
   )
 }
 
-/// Shows the error of a model function as data: `NotFound`, the
-/// constraint of a `Conflict`, or the message of a `QueryFailed` and the
-/// kind of its cause. The details of a cause can differ between
-/// PostgreSQL versions, so only its constructor shows.
-fn show_error(label: String, value: Result(a, client.ModelQueryError)) -> Nil {
+/// Shows the error of a model function as data: its kind, its message and
+/// the kind of its cause. The cause of a `Conflict` also shows the name of
+/// its constraint, from `client.violated_constraint`. The details of a
+/// cause can differ between PostgreSQL versions, so only its constructor
+/// shows.
+fn show_error(
+  label: String,
+  value: Result(a, dream_errors.Error(client.QueryError)),
+) -> Nil {
   let text = case value {
     Ok(found) -> "Ok " <> string.inspect(found)
-    Error(client.NotFound) -> "NotFound"
-    Error(client.Conflict(constraint:)) -> "Conflict " <> constraint
-    Error(client.QueryFailed(message:, cause:)) ->
-      "QueryFailed " <> message <> " (cause: " <> cause_kind(cause) <> ")"
+    Error(error) ->
+      dream_errors.kind_name(error)
+      <> " "
+      <> dream_errors.message(error)
+      <> cause_text(dream_errors.cause(error))
   }
   io.println("| " <> label <> ": " <> text)
+}
+
+fn cause_text(cause: Option(client.QueryError)) -> String {
+  case cause {
+    None -> ""
+    Some(cause) ->
+      case client.violated_constraint(cause) {
+        Ok(constraint) ->
+          " (cause: " <> cause_kind(cause) <> " of " <> constraint <> ")"
+        Error(Nil) -> " (cause: " <> cause_kind(cause) <> ")"
+      }
+  }
 }
 
 fn cause_kind(cause: client.QueryError) -> String {

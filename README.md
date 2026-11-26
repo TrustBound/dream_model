@@ -22,13 +22,13 @@
 
 dream_model writes the model modules of a [Dream](https://github.com/TrustBound/dream) app from SQL. You write one `.sql` file for each query, in a folder with the name of the model. dream_model analyzes each statement against your PostgreSQL database and writes one typed Gleam module for the folder. Each function of the module returns its error as data, and the controller of the app maps it to a response.
 
-dream_model is a tool for development time. Your app does not run it. The generated code imports only `dream_postgres/client` and the Gleam standard library.
+dream_model is a tool for development time. Your app does not run it. The generated code imports only `dream_postgres/client`, `dream_errors` and the Gleam standard library.
 
 ## Features
 
 - ✅ One `.sql` file gives one typed function, with a record type for its rows
 - ✅ `Option` only where a value can be NULL: the generator reads the schema and the query tree of PostgreSQL to decide
-- ✅ Data errors: no row gives `NotFound`, a unique violation gives `Conflict` with the name of the constraint, and every other failure gives `QueryFailed` with the name of the function and the original error
+- ✅ Data errors, with the shared `dream_errors.Error` of the Dream ecosystem: no row gives `NotFound`, a violation of a hinted unique constraint gives `Conflict`, a timeout gives `Timeout`, a lost connection gives `Unavailable`, and every other failure gives `Failed`. Each error keeps the original database error as its cause
 - ✅ Hints in SQL comments: the row count, the type name, the unique constraints, the parameter names and NULL promises
 - ✅ `--check` for CI: it fails when a module differs from its `.sql` files
 - ✅ A schema fingerprint in each module, so the app stops at start-up when the schema changed after the generation
@@ -36,9 +36,18 @@ dream_model is a tool for development time. Your app does not run it. The genera
 
 ## Installation
 
-dream_model is a dev dependency. The generated modules need `dream_postgres` at run time.
+dream_model is a dev dependency. The generated modules import `dream_postgres` and `dream_errors`, so the app needs both as dependencies:
 
-### The dev dependency of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L13-L14"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-dev-dependency-of-the-end-to-end-app-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+### The dependencies of the generated modules <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L11-L12"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-dependencies-of-the-generated-modules-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+
+```toml
+dream_errors = ">= 1.0.0 and < 2.0.0"
+dream_postgres = ">= 2.1.0 and < 3.0.0"
+```
+
+`gleam add dream_postgres dream_errors` writes these lines.
+
+### The dev dependency of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L14-L15"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-dev-dependency-of-the-end-to-end-app-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```toml
 [dev-dependencies]
@@ -79,7 +88,7 @@ gleam run -m dream_model
 
 The command writes `src/app/models/user.gleam`. It holds the record type, and one function for each `.sql` file:
 
-### The generated type <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L19-L22"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-generated-type-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+### The generated type <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L20-L23"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-generated-type-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
 /// A row of create.sql, find.sql, find_by_email.sql, list.sql and search.sql.
@@ -88,14 +97,14 @@ pub type User {
 }
 ```
 
-### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L80-L91"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-function-of-findsql-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L83-L94"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#the-function-of-findsql-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from find.sql.
 pub fn find(
   db: client.Connection,
   id: Int,
-) -> Result(User, client.ModelQueryError) {
+) -> Result(User, dream_errors.Error(client.QueryError)) {
   "select id, email, nickname from users where id = $1"
   |> client.query
   |> client.parameter(client.int(id))
@@ -105,13 +114,13 @@ pub fn find(
 }
 ```
 
-A controller gives the result to the client. It picks the status and the text of each error, for example a 404 for a missing user and a 409 for a taken email:
+A controller gives the result to the client. It picks the status and the text of each error, for example a 404 for a missing user and a 409 for a taken email. The cause of a `Conflict` is the database error, and `client.violated_constraint` gives the name of its constraint. The message of an error is for developers and logs, so the controller never sends it:
 
-### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L10-L38"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#answer-with-the-user-or-the-error-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L12-L46"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/docs/guides/getting-started.md#answer-with-the-user-or-the-error-"><img align="right" alt="Guide: Getting started" title="Guide: Getting started" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
-/// Answers with the email of the user, or with the status and the message
-/// of the error.
+/// Answers with the email of the user, or with the status and the text of
+/// the error.
 pub fn show(db: client.Connection, id: Int) -> Response {
   case user.find(db, id) {
     Ok(found) -> text_response(200, found.email)
@@ -128,15 +137,21 @@ pub fn create(db: client.Connection, email: String) -> Response {
   }
 }
 
-/// The status and the text of each model error.
-fn error_response(error: client.ModelQueryError) -> Response {
+/// The status and the text of each model error. The cause of a `Conflict`
+/// is the error of the database, and `client.violated_constraint` gives
+/// the name of its constraint.
+fn error_response(error: dream_errors.Error(client.QueryError)) -> Response {
   case error {
-    client.NotFound -> text_response(404, "User not found")
-    client.Conflict("users_email_key") ->
-      text_response(409, "Email already taken")
-    client.Conflict(constraint:) ->
-      text_response(409, "Conflict on " <> constraint)
-    client.QueryFailed(message:, cause: _) -> text_response(500, message)
+    dream_errors.NotFound(..) -> text_response(404, "User not found")
+    dream_errors.Conflict(cause:, ..) ->
+      case client.violated_constraint(cause) {
+        Ok("users_email_key") -> text_response(409, "Email already taken")
+        _ -> text_response(409, "Conflict")
+      }
+    dream_errors.Unavailable(..) -> text_response(503, "Service unavailable")
+    dream_errors.Timeout(..) -> text_response(504, "Timed out")
+    dream_errors.Invalid(..) | dream_errors.Failed(..) ->
+      text_response(500, "Internal server error")
   }
 }
 ```
@@ -155,7 +170,7 @@ fn error_response(error: client.ModelQueryError) -> Response {
 
 - PostgreSQL 16, 17, 18 or 19. dream_model refuses PostgreSQL 15 and older.
 - Gleam 1.19.2 or newer.
-- `dream` 3.0.0 or newer and `dream_postgres` 2.1.0 or newer in the app.
+- `dream` 3.0.0 or newer, `dream_postgres` 2.1.0 or newer and `dream_errors` 1.0.0 or newer in the app.
 
 ## About Dream
 

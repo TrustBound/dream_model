@@ -78,7 +78,7 @@ pub type Query {
     output: Output,
     arguments: List(Argument),
     /// The names of the unique constraints and indexes whose violation
-    /// gives `client.Conflict`.
+    /// gives `dream_errors.Conflict`.
     unique: List(String),
     /// The relations whose catalog facts the analysis read.
     relations: List(String),

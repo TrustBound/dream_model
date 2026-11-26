@@ -49,7 +49,7 @@ The command formats each module with `gleam format`, in `build/dream_model/forma
 
 Put the settings in the `[tools.dream_model]` table of the `gleam.toml` of the app. Both settings are optional.
 
-### The settings of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L19-L20"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The settings of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L20-L21"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```toml
 [tools.dream_model]
@@ -146,8 +146,8 @@ Each problem of a SQL file is one line: `<file>:<line>: <message>`. After the pr
 | `'returns: none' takes no type name` | Remove the type name |
 | `'<name>' is not a type name; a type name starts with a capital letter and has only letters and digits, for example User` | Fix the type name |
 | `'<name>' is not a type name; a type of another model is its module and its type, for example app/models/user.User` | Fix the module type |
-| `the 'not found' hint is gone: no row gives client.NotFound, which has no message; remove this line and write the message where the app maps client.NotFound` | Remove the line. Write the text in the controller |
-| `'unique <name>: <message>' is the old form of the unique hint, and a hint holds no message now; write 'unique: <name>' and write the message where the app maps client.Conflict` | Write `-- unique: <name>`. Write the text in the controller |
+| `the 'not found' hint is gone: no row gives dream_errors.NotFound; remove this line and write the text for the user where the app maps dream_errors.NotFound` | Remove the line. Write the text in the controller |
+| `'unique <name>: <message>' is the old form of the unique hint, and a hint holds no message now; write 'unique: <name>' and write the text for the user where the app maps dream_errors.Conflict` | Write `-- unique: <name>`. Write the text in the controller |
 | `the 'unique' hint names no constraint; write 'unique: <constraint>', for example 'unique: users_email_key'` | Name the constraint |
 | `the constraint '<name>' is in a 'unique' hint a second time; the first one is on line <n>` | Name each constraint one time |
 | `'returns: none', and the statement returns the columns <columns>; remove the columns or write another returns form` | Remove the columns, or change the form |

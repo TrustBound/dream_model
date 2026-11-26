@@ -2,13 +2,13 @@
 
 **Release Date:** Unreleased
 
-This is the first release of dream_model. It writes the model modules of a Dream app from PostgreSQL `.sql` files. You write one `.sql` file for each query. dream_model analyzes each statement against your database and writes one typed Gleam module for each model folder. Each function returns its error as data, `ModelQueryError` of `dream_postgres/client`, and the controllers of the app map it to a response.
+This is the first release of dream_model. It writes the model modules of a Dream app from PostgreSQL `.sql` files. You write one `.sql` file for each query. dream_model analyzes each statement against your database and writes one typed Gleam module for each model folder. Each function returns its error as data, `dream_errors.Error(client.QueryError)`, the shared error of the Dream ecosystem, and the controllers of the app map it to a response.
 
 ## Key Highlights
 
 - **One `.sql` file, one typed function**: a record type for the rows, and the parameters as arguments
 - **`Option` only where a value can be NULL**: dream_model reads the schema and the analyzed query tree of PostgreSQL
-- **Data errors**: `NotFound`, `Conflict(constraint)` and `QueryFailed(message, cause)`, with no HTTP status. The generated code imports no Dream module
+- **Data errors**: `dream_errors.Error` with `NotFound`, `Conflict`, `Timeout`, `Unavailable` and `Failed`, with no HTTP status. Each error but `NotFound` keeps the `QueryError` as its cause. The generated code imports `dream_errors` and `dream_postgres/client`, and no module of the `dream` package
 - **`--check` in CI and a schema fingerprint at start-up**: catch a changed `.sql` file and a changed table
 
 ## What's New
@@ -26,14 +26,14 @@ select id, email, nickname from users where id = $1
 
 `gleam run -m dream_model` writes `src/app/models/user.gleam`:
 
-#### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L80-L91"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L83-L94"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from find.sql.
 pub fn find(
   db: client.Connection,
   id: Int,
-) -> Result(User, client.ModelQueryError) {
+) -> Result(User, dream_errors.Error(client.QueryError)) {
   "select id, email, nickname from users where id = $1"
   |> client.query
   |> client.parameter(client.int(id))
@@ -66,15 +66,15 @@ An array is `List(Option(T))`, because PostgreSQL never forbids a NULL element. 
 #### A NULL element breaks the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L48"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-| sample.tags with a NULL element: QueryFailed the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL (cause: UnexpectedResultType)
+| sample.tags with a NULL element: failed the SQL file src/app/models/sample/tags.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL (cause: UnexpectedResultType)
 ```
 
-A `timestamp`, `timestamptz` or `date` value of `infinity` gives `QueryFailed` with a message that names the function, the column and the Gleam type:
+A `timestamp`, `timestamptz` or `date` value of `infinity` gives `Failed` with a message that names the function, the column and the Gleam type:
 
 #### The message of an infinite timestamp <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/expected_output.txt#L35"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-| sample.get of an infinite timestamp: QueryFailed sample.get: the column happened_at holds infinity, which the Gleam type Timestamp cannot hold (cause: UnexpectedResultType)
+| sample.get of an infinite timestamp: failed sample.get: the column happened_at holds infinity, which the Gleam type Timestamp cannot hold (cause: UnexpectedResultType)
 ```
 
 ### CI and schema drift
@@ -97,8 +97,8 @@ pub fn check_models(db: client.Connection) -> Result(Nil, String) {
 
 ## Testing
 
-- The full test run on PostgreSQL 16, 17, 18 and 19: 2832 tests, 0 failed, 100.0% line coverage (2273 of 2273 lines). The run took 1 minute 27 seconds of wall time, and the runners report 8 minutes 52 seconds of test time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
-- The long fuzz runs analyzed 20,809 random queries on PostgreSQL 16 to 19 with 0 failures, and the mutation test killed each of its 73 mutants
+- The full test run on PostgreSQL 16, 17, 18 and 19: 2832 tests, 0 failed, 100.0% line coverage (2273 of 2273 lines). `make check` took 1 minute 25 seconds of wall time, with the format check, the build, the docs build and the snippet check, and the runners report 8 minutes 40 seconds of test time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The long fuzz runs analyzed 20,809 random queries on PostgreSQL 16 to 19 with 0 failures, and the mutation test killed each of its 76 mutants
 - The attack tests analyze each statement and then run it on several data sets: a column typed never NULL must never return NULL, and each `Option` parameter must accept NULL
 - The end-to-end tests generate the models of `e2e/model_app` on each version, compare them with the checked-in modules, run them against the database, and compare the output
 
@@ -106,7 +106,7 @@ pub fn check_models(db: client.Connection) -> Result(Nil, String) {
 
 This is the first release. Add it as a dev dependency:
 
-### The dev dependency of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L13-L14"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The dev dependency of the end-to-end app <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/gleam.toml#L14-L15"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```toml
 [dev-dependencies]
@@ -117,7 +117,7 @@ dream_model = ">= 1.0.0 and < 2.0.0"
 
 ### Migration Guide
 
-No migration is necessary. The app needs `dream` 3.0.0 or newer and `dream_postgres` 2.1.0 or newer.
+No migration is necessary. The app needs `dream` 3.0.0 or newer, and `dream_postgres` 2.1.0 or newer and `dream_errors` 1.0.0 or newer as dependencies, because the generated modules import both.
 
 ## Documentation
 

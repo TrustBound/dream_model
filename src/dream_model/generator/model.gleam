@@ -66,7 +66,9 @@ pub const helper_names = [
 
 /// The aliases of the modules that a generated module can import, besides
 /// the modules of other models.
-pub const standard_aliases = ["client", "decode", "option", "result"]
+pub const standard_aliases = [
+  "client", "decode", "dream_errors", "option", "result",
+]
 
 /// The type and constructor names that a type of the module itself cannot
 /// take: the types and constructors of the Gleam prelude, and the names
@@ -351,7 +353,7 @@ fn render_imports(unit: Unit, imports: List(#(String, String))) -> String {
     False -> None
   }
   list.map(imports, fn(entry) { "import " <> entry.0 })
-  |> list.append(["import dream_postgres/client"])
+  |> list.append(["import dream_errors", "import dream_postgres/client"])
   |> list.append(option.values([decode_import]))
   |> list.append(option.values([option_import, result_import]))
   |> list.sort(string.compare)
@@ -784,7 +786,7 @@ fn render_function(
           <> arguments
           <> ") -> Result("
           <> return_type_text(unit, found, records)
-          <> ", client.ModelQueryError) {",
+          <> ", dream_errors.Error(client.QueryError)) {",
         "  " <> string_literal(found.sql),
         "  |> client.query",
       ],
@@ -888,7 +890,7 @@ const one_row_helper =
   executed: Result(client.Returned(row), client.QueryError),
   query_name: String,
   unique: List(String),
-) -> Result(row, client.ModelQueryError) {
+) -> Result(row, dream_errors.Error(client.QueryError)) {
   case executed {
     Ok(returned) -> single_row(returned, query_name)
     Error(query_error) ->
@@ -900,12 +902,12 @@ const single_row_helper =
   "fn single_row(
   returned: client.Returned(row),
   query_name: String,
-) -> Result(row, client.ModelQueryError) {
+) -> Result(row, dream_errors.Error(client.QueryError)) {
   case returned.rows {
     [row] -> Ok(row)
-    [] -> Error(client.NotFound)
+    [] -> Error(dream_errors.NotFound(query_name <> \" found no row\"))
     _ ->
-      Error(client.QueryFailed(
+      Error(dream_errors.Failed(
         query_name <> \" returned more than one row\",
         client.more_than_one_row(returned.count),
       ))
@@ -917,7 +919,7 @@ const maybe_row_helper =
   executed: Result(client.Returned(row), client.QueryError),
   query_name: String,
   unique: List(String),
-) -> Result(Option(row), client.ModelQueryError) {
+) -> Result(Option(row), dream_errors.Error(client.QueryError)) {
   case executed {
     Ok(returned) -> optional_row(returned, query_name)
     Error(query_error) ->
@@ -929,12 +931,12 @@ const optional_row_helper =
   "fn optional_row(
   returned: client.Returned(row),
   query_name: String,
-) -> Result(Option(row), client.ModelQueryError) {
+) -> Result(Option(row), dream_errors.Error(client.QueryError)) {
   case returned.rows {
     [] -> Ok(None)
     [row] -> Ok(Some(row))
     _ ->
-      Error(client.QueryFailed(
+      Error(dream_errors.Failed(
         query_name <> \" returned more than one row\",
         client.more_than_one_row(returned.count),
       ))
@@ -946,7 +948,7 @@ const many_rows_helper =
   executed: Result(client.Returned(row), client.QueryError),
   query_name: String,
   unique: List(String),
-) -> Result(List(row), client.ModelQueryError) {
+) -> Result(List(row), dream_errors.Error(client.QueryError)) {
   executed
   |> result.map(fn(returned) { returned.rows })
   |> result.map_error(query_error_to_error(_, query_name, unique))
@@ -957,7 +959,7 @@ const no_rows_helper =
   executed: Result(client.Returned(row), client.QueryError),
   query_name: String,
   unique: List(String),
-) -> Result(Nil, client.ModelQueryError) {
+) -> Result(Nil, dream_errors.Error(client.QueryError)) {
   executed
   |> result.replace(Nil)
   |> result.map_error(query_error_to_error(_, query_name, unique))
@@ -968,18 +970,24 @@ const query_error_helper =
   query_error: client.QueryError,
   query_name: String,
   unique: List(String),
-) -> client.ModelQueryError {
+) -> dream_errors.Error(client.QueryError) {
   let conflict =
     unique_violation(client.violated_constraint(query_error), unique)
   let promise = client.broken_promise(query_error)
   let infinite = client.infinite_value(query_error)
-  case conflict, promise, infinite {
-    Ok(constraint), _, _ -> client.Conflict(constraint)
-    Error(Nil), Ok(message), _ -> client.QueryFailed(message, query_error)
-    Error(Nil), Error(Nil), Ok(message) ->
-      client.QueryFailed(query_name <> \": \" <> message, query_error)
-    Error(Nil), Error(Nil), Error(Nil) ->
-      client.QueryFailed(query_name <> \" failed\", query_error)
+  let shared = client.to_error(query_error)
+  let described = query_name <> \": \" <> dream_errors.message(shared)
+  case conflict, promise, infinite, shared {
+    Ok(_), _, _, _ -> dream_errors.Conflict(described, query_error)
+    Error(Nil), Ok(message), _, _ -> dream_errors.Failed(message, query_error)
+    Error(Nil), Error(Nil), Ok(message), _ ->
+      dream_errors.Failed(query_name <> \": \" <> message, query_error)
+    Error(Nil), Error(Nil), Error(Nil), dream_errors.Timeout(..) ->
+      dream_errors.Timeout(described, query_error)
+    Error(Nil), Error(Nil), Error(Nil), dream_errors.Unavailable(..) ->
+      dream_errors.Unavailable(described, query_error)
+    Error(Nil), Error(Nil), Error(Nil), _ ->
+      dream_errors.Failed(described, query_error)
   }
 }
 

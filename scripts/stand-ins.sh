@@ -3,7 +3,9 @@
 # folders, so that the build and the tests run with no Hex request.
 #
 # dream_model needs dream_postgres 2.1.0, which needs dream_postgres_client
-# 1.1.0 and dream_postgres_driver 1.1.0 (the exact text of numeric). The
+# 1.1.0, dream_postgres_driver 1.1.0 (the exact text of numeric) and
+# dream_errors 1.0.0. The generated modules of the end-to-end app import
+# dream_errors too. The
 # end-to-end app in e2e/model_app also needs Dream 3.0.0 and dream_model
 # 1.0.0. manifest.toml and e2e/model_app/manifest.toml already name these
 # versions, with a checksum of zeros. Gleam does not
@@ -12,14 +14,15 @@
 #
 # Remove this script when these packages are on Hex. Then run
 # `gleam deps update dream_postgres dream_postgres_client
-# dream_postgres_driver` here and in e2e/model_app to write the
+# dream_postgres_driver dream_errors` here and in e2e/model_app to write the
 # real checksums into the manifests.
 #
 # The sources (each one can be changed with an environment variable):
 #   DREAM_POSTGRES_SOURCE  a dream_postgres checkout at version 2.1.0,
 #                          after `gleam build` there (its build/packages
 #                          gives dream_postgres_client 1.1.0,
-#                          dream_postgres_driver 1.1.0 and the other
+#                          dream_postgres_driver 1.1.0, dream_errors 1.0.0
+#                          and the other
 #                          packages of dream_postgres)
 #   DREAM_SOURCE           a git clone of Dream
 #   DREAM_COMMIT           the Dream commit of version 3.0.0
@@ -36,7 +39,7 @@ dream_source="${DREAM_SOURCE:-$root/../dream-u770}"
 dream_commit="${DREAM_COMMIT:-516c919}"
 dream_packages="${DREAM_PACKAGES:-$dream_source/build/packages}"
 
-dream_postgres_packages="dream_postgres_client dream_postgres_driver backoff opentelemetry_api pg_types exception"
+dream_postgres_packages="dream_postgres_client dream_postgres_driver dream_errors backoff opentelemetry_api pg_types exception"
 dream_dependency_packages="dream_http_server dream_socket_server gleam_http gleam_yielder marceau gramps gleam_crypto hpack_erl logging"
 
 # copy_package <from folder> <to packages folder> <name>

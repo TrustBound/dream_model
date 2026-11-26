@@ -319,7 +319,7 @@ fn refusal_tests() {
         Error([
           HintError(
             2,
-            "the 'not found' hint is gone: no row gives client.NotFound, which has no message; remove this line and write the message where the app maps client.NotFound",
+            "the 'not found' hint is gone: no row gives dream_errors.NotFound; remove this line and write the text for the user where the app maps dream_errors.NotFound",
           ),
         ]),
       )
@@ -336,7 +336,7 @@ fn refusal_tests() {
         Error([
           HintError(
             1,
-            "'unique users_email_key: Email already taken' is the old form of the unique hint, and a hint holds no message now; write 'unique: users_email_key' and write the message where the app maps client.Conflict",
+            "'unique users_email_key: Email already taken' is the old form of the unique hint, and a hint holds no message now; write 'unique: users_email_key' and write the text for the user where the app maps dream_errors.Conflict",
           ),
         ]),
       )
@@ -353,7 +353,7 @@ fn refusal_tests() {
         Error([
           HintError(
             1,
-            "'unique  a_key:' is the old form of the unique hint, and a hint holds no message now; write 'unique: a_key' and write the message where the app maps client.Conflict",
+            "'unique  a_key:' is the old form of the unique hint, and a hint holds no message now; write 'unique: a_key' and write the text for the user where the app maps dream_errors.Conflict",
           ),
         ]),
       )

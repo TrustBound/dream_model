@@ -1,15 +1,16 @@
 //// The model hints of a SQL file: comment lines that tell the generator
 //// what the generated function returns and which errors it maps.
 ////
-//// - `-- returns: one User` returns one row, or `client.NotFound`.
+//// - `-- returns: one User` returns one row, or `dream_errors.NotFound`.
 ////   `maybe` returns `Option`, `many` returns `List`, and `none` returns
 ////   `Nil`. With no type name, `one`, `maybe` and `many` return the value
 ////   of the only result column, or the model's own type when the result
 ////   has more columns. A type of another model is named by its module, for
 ////   example `app/models/user.User`.
 //// - `-- unique: users_email_key, users_pkey` maps a violation of one of
-////   these unique constraints to `client.Conflict` with its name. A hint
-////   holds no text for a user: the app writes that text.
+////   these unique constraints to `dream_errors.Conflict`, with the query
+////   error as the cause. A hint holds no text for a user: the app writes
+////   that text.
 //// - `-- not null elements: tags, scores` promises that the elements of
 ////   these array result columns are never NULL. Each one is a `List(T)`,
 ////   not a `List(Option(T))`, and the generated code checks the promise
@@ -32,7 +33,7 @@ import gleam/string
 
 /// What a generated function returns.
 pub type Returns {
-  /// One row. No row is `client.NotFound`.
+  /// One row. No row is `dream_errors.NotFound`.
   ReturnsOne
   /// No row or one row, as `Option`.
   ReturnsMaybe
@@ -149,7 +150,7 @@ fn add_line(
     "returns" -> add_returns(hints, line)
     "not found" ->
       Error(
-        "the 'not found' hint is gone: no row gives client.NotFound, which has no message; remove this line and write the message where the app maps client.NotFound",
+        "the 'not found' hint is gone: no row gives dream_errors.NotFound; remove this line and write the text for the user where the app maps dream_errors.NotFound",
       )
     "params" -> Ok(QueryHints(..hints, parameters_line: Some(line.number)))
     "not null" | "nullable" -> Ok(add_column_names(hints, line))
@@ -161,7 +162,7 @@ fn add_line(
         <> string.trim(line.key <> ": " <> line.value)
         <> "' is the old form of the unique hint, and a hint holds no message now; write 'unique: "
         <> string.trim(constraint)
-        <> "' and write the message where the app maps client.Conflict",
+        <> "' and write the text for the user where the app maps dream_errors.Conflict",
       )
     _ -> Ok(hints)
   }
