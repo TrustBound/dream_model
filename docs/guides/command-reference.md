@@ -1,3 +1,5 @@
+[README](https://hexdocs.pm/dream_model/1.0.0/) > [Guides](https://hexdocs.pm/dream_model/1.0.0/guides/index.html) > Command reference
+
 # Command reference
 
 This page lists every option, setting, exit status and message of `gleam run -m dream_model`. The guides show how to use them.

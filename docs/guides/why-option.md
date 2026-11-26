@@ -1,3 +1,5 @@
+[README](https://hexdocs.pm/dream_model/1.0.0/) > [Guides](https://hexdocs.pm/dream_model/1.0.0/guides/index.html) > Why is this column Option?
+
 # Why is this column Option?
 
 A field of a generated type is `Option` when its column can be NULL. A parameter is `Option` when NULL is a value that the statement can store. dream_model decides both from the schema and from the query tree of PostgreSQL. It never guesses: when it cannot prove that a value is never NULL, the value is `Option`. This guide gives each reason, in the words of the generator, with an example query and what to do.

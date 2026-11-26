@@ -1,3 +1,5 @@
+[README](https://hexdocs.pm/dream_model/1.0.0/) > [Guides](https://hexdocs.pm/dream_model/1.0.0/guides/index.html) > Errors
+
 # Errors
 
 Each generated function returns `Result(row, dream_errors.Error(client.QueryError))`. `client` is `dream_postgres/client`, and `dream_errors.Error` is the shared error of the Dream ecosystem. The error is data, with no HTTP status and no text for a user: `NotFound(message)`, `Conflict(message, cause)`, `Timeout(message, cause)`, `Unavailable(message, cause)` or `Failed(message, cause)`. The `cause` is the original `QueryError` of the database call. Your controller picks the status and the text of each case. This guide shows each error, with the exact output of the end-to-end app.

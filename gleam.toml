@@ -16,6 +16,7 @@ internal_modules = ["dream_model/postgres", "dream_model/postgres/*", "dream_mod
 
 [documentation]
 pages = [
+    { title = "Guides", path = "guides/index.html", source = "./docs/guides/index.md" },
     { title = "Getting started", path = "guides/getting-started.html", source = "./docs/guides/getting-started.md" },
     { title = "Hints", path = "guides/hints.html", source = "./docs/guides/hints.md" },
     { title = "Why is this column Option?", path = "guides/why-option.html", source = "./docs/guides/why-option.md" },

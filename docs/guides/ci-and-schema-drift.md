@@ -1,3 +1,5 @@
+[README](https://hexdocs.pm/dream_model/1.0.0/) > [Guides](https://hexdocs.pm/dream_model/1.0.0/guides/index.html) > CI and schema drift
+
 # CI and schema drift
 
 A generated module is correct for the schema and the `.sql` files that dream_model read. Two things can make it wrong later: a `.sql` file changes, or a migration changes a table. This guide catches the first in CI with `--check`, and the second when the app starts, with `client.check_schema`.

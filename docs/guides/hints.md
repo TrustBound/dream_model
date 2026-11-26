@@ -1,3 +1,5 @@
+[README](https://hexdocs.pm/dream_model/1.0.0/) > [Guides](https://hexdocs.pm/dream_model/1.0.0/guides/index.html) > Hints
+
 # Hints
 
 A `.sql` file can start with comment lines that tell dream_model what the generated function returns, which errors it gives, and which values are `Option`. These lines are hints. This guide shows each hint with a real file of the end-to-end app and the function that dream_model writes for it.

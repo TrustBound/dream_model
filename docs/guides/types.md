@@ -1,3 +1,5 @@
+[README](https://hexdocs.pm/dream_model/1.0.0/) > [Guides](https://hexdocs.pm/dream_model/1.0.0/guides/index.html) > Types
+
 # Types
 
 dream_model gives each column and each parameter a Gleam type from its PostgreSQL type. This guide gives the type of each PostgreSQL type, shows exact numbers, arrays and the values `infinity` and `-infinity`, and tells what to do with a type that dream_model does not support.

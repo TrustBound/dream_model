@@ -1,3 +1,5 @@
+[README](https://hexdocs.pm/dream_model/1.0.0/) > [Guides](https://hexdocs.pm/dream_model/1.0.0/guides/index.html) > Getting started
+
 # Getting started
 
 Your Dream app needs to read and write rows in PostgreSQL. You know the SQL. You do not want to write the decoders, the parameter lists and the error mapping by hand for each query. This guide writes three `.sql` files of a user model, generates the Gleam module, calls it from a controller, and checks the schema when the app starts.
