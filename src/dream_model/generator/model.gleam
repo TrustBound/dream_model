@@ -14,6 +14,7 @@ import dream_model/generator/query_hint.{
   type TypeName, LocalType, ModuleType, ReturnsMany, ReturnsMaybe, ReturnsNone,
   ReturnsOne,
 }
+import dream_model/generator/unqualified.{type Import, Import, unqualify}
 import gleam/dict
 import gleam/int
 import gleam/list
@@ -278,17 +279,19 @@ pub fn render(unit: Unit, hash: String) -> Result(String, List(Problem)) {
   let functions =
     list.map(unit.queries, render_function(unit, _, records, decoders))
   let used_helpers = list.map(unit.queries, helper_of) |> list.unique
-  [
-    header(unit),
-    render_imports(unit, imports),
-    render_fingerprint(unit, hash),
-    ..list.flatten([
-      list.filter_map(records, render_type(unit, _)),
-      functions,
-      render_decoders(unit, records, decoders),
-      render_helpers(used_helpers),
-    ])
-  ]
+  let code =
+    [
+      render_fingerprint(unit, hash),
+      ..list.flatten([
+        list.filter_map(records, render_type(unit, _)),
+        functions,
+        render_decoders(unit, records, decoders),
+        render_helpers(used_helpers),
+      ])
+    ]
+    |> string.join("\n\n")
+  let #(import_lines, code) = unqualify(code, import_modules(imports, records))
+  [header(unit), render_imports(unit, import_lines), code]
   |> string.join("\n\n")
   |> string.append("\n")
 }
@@ -325,9 +328,49 @@ fn module_alias(module: String) -> String {
   string.split(module, "/") |> list.last |> result.unwrap(module)
 }
 
-fn render_imports(unit: Unit, imports: List(#(String, String))) -> String {
-  let has_output =
-    list.any(unit.queries, fn(found) { found.output != NoOutput })
+/// The modules that the code of a generated module can use, in the order
+/// in which they get a bare name that two of them give: `client.int`
+/// keeps the bare name `int`, and `decode.int` keeps its module.
+fn import_modules(
+  imports: List(#(String, String)),
+  records: List(Record),
+) -> List(Import) {
+  let models =
+    list.map(imports, fn(entry) {
+      let names =
+        list.filter_map(records, fn(record) {
+          case record.alias == Some(entry.1) {
+            True -> Ok(record.name)
+            False -> Error(Nil)
+          }
+        })
+      Import(path: entry.0, alias: entry.1, constructors: [], records: names)
+    })
+  [
+    Import(
+      path: "dream_postgres/client",
+      alias: "client",
+      constructors: ["SchemaFingerprint"],
+      records: [],
+    ),
+    Import(
+      path: "dream_errors",
+      alias: "dream_errors",
+      constructors: ["Conflict", "Failed", "NotFound", "Timeout", "Unavailable"],
+      records: [],
+    ),
+    Import(
+      path: "gleam/dynamic/decode",
+      alias: "decode",
+      constructors: [],
+      records: [],
+    ),
+    Import(path: "gleam/result", alias: "result", constructors: [], records: []),
+    ..models
+  ]
+}
+
+fn render_imports(unit: Unit, import_lines: List(String)) -> String {
   let has_option =
     list.any(unit.queries, fn(found) {
       list.any(output_fields(found), fn(field) { field.optional })
@@ -336,26 +379,11 @@ fn render_imports(unit: Unit, imports: List(#(String, String))) -> String {
   let has_maybe =
     list.any(unit.queries, fn(found) { found.returns == ReturnsMaybe })
   let option_import = case has_maybe, has_option {
-    True, _ -> Some("import gleam/option.{type Option, None, Some}")
-    False, True -> Some("import gleam/option.{type Option}")
-    False, False -> None
+    True, _ -> ["import gleam/option.{type Option, None, Some}"]
+    False, True -> ["import gleam/option.{type Option}"]
+    False, False -> []
   }
-  let result_import = case
-    list.any(unit.queries, fn(found) {
-      found.returns == ReturnsMany || found.returns == ReturnsNone
-    })
-  {
-    True -> Some("import gleam/result")
-    False -> None
-  }
-  let decode_import = case has_output {
-    True -> Some("import gleam/dynamic/decode")
-    False -> None
-  }
-  list.map(imports, fn(entry) { "import " <> entry.0 })
-  |> list.append(["import dream_errors", "import dream_postgres/client"])
-  |> list.append(option.values([decode_import]))
-  |> list.append(option.values([option_import, result_import]))
+  list.append(import_lines, option_import)
   |> list.sort(string.compare)
   |> string.join("\n")
 }

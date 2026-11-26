@@ -113,7 +113,7 @@ The command writes `src/app/models/user.gleam` and prints `wrote src/app/models/
 
 The module starts with the record type. Each file that returns `User` must give it the same fields:
 
-### The generated type <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L20-L23"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The generated type <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L27-L30"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// A row of create.sql, find.sql, find_by_email.sql, list.sql and search.sql.
@@ -126,39 +126,36 @@ pub type User {
 
 Each `.sql` file gives one function. Its first argument is the connection, and the other arguments are the parameters of the statement:
 
-### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L83-L94"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L82-L90"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from find.sql.
-pub fn find(
-  db: client.Connection,
-  id: Int,
-) -> Result(User, dream_errors.Error(client.QueryError)) {
+pub fn find(db: Connection, id: Int) -> Result(User, Error(QueryError)) {
   "select id, email, nickname from users where id = $1"
-  |> client.query
-  |> client.parameter(client.int(id))
-  |> client.returning(user_decoder())
-  |> client.execute(db)
+  |> query
+  |> parameter(int(id))
+  |> returning(user_decoder())
+  |> execute(db)
   |> one_row("user.find", [])
 }
 ```
 
-### The function of create.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L36-L50"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The function of create.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L41-L55"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from create.sql.
 pub fn create(
-  db: client.Connection,
+  db: Connection,
   email: String,
   nickname: Option(String),
-) -> Result(User, dream_errors.Error(client.QueryError)) {
+) -> Result(User, Error(QueryError)) {
   "insert into users (email, nickname) values ($1, $2)
 returning id, email, nickname"
-  |> client.query
-  |> client.parameter(client.text(email))
-  |> client.parameter(client.nullable(client.text, nickname))
-  |> client.returning(user_decoder())
-  |> client.execute(db)
+  |> query
+  |> parameter(text(email))
+  |> parameter(nullable(text, nickname))
+  |> returning(user_decoder())
+  |> execute(db)
   |> one_row("user.create", ["users_email_key"])
 }
 ```
@@ -169,13 +166,13 @@ returning id, email, nickname"
 
 Each function returns `Result(row, dream_errors.Error(client.QueryError))`, the shared error of the Dream ecosystem. The error is data: `NotFound`, `Conflict`, `Timeout`, `Unavailable` or `Failed`, each with a message for developers and, except `NotFound`, the database error as the cause. The controller picks the status and the text of each case, and reads the constraint of a `Conflict` with `client.violated_constraint`. It never sends the message, which can name tables, constraints and values:
 
-### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L12-L46"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L16-L49"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Answers with the email of the user, or with the status and the text of
 /// the error.
-pub fn show(db: client.Connection, id: Int) -> Response {
-  case user.find(db, id) {
+pub fn show(db: Connection, id: Int) -> Response {
+  case find(db, id) {
     Ok(found) -> text_response(200, found.email)
     Error(error) -> error_response(error)
   }
@@ -183,7 +180,7 @@ pub fn show(db: client.Connection, id: Int) -> Response {
 
 /// Creates a user and answers with the email, or with a 409 when the email
 /// is taken.
-pub fn create(db: client.Connection, email: String) -> Response {
+pub fn create(db: Connection, email: String) -> Response {
   case user.create(db, email, None) {
     Ok(created) -> text_response(201, created.email)
     Error(error) -> error_response(error)
@@ -191,20 +188,19 @@ pub fn create(db: client.Connection, email: String) -> Response {
 }
 
 /// The status and the text of each model error. The cause of a `Conflict`
-/// is the error of the database, and `client.violated_constraint` gives
+/// is the error of the database, and `violated_constraint` gives
 /// the name of its constraint.
-fn error_response(error: dream_errors.Error(client.QueryError)) -> Response {
+fn error_response(error: Error(QueryError)) -> Response {
   case error {
-    dream_errors.NotFound(..) -> text_response(404, "User not found")
-    dream_errors.Conflict(cause:, ..) ->
-      case client.violated_constraint(cause) {
+    NotFound(..) -> text_response(404, "User not found")
+    Conflict(cause:, ..) ->
+      case violated_constraint(cause) {
         Ok("users_email_key") -> text_response(409, "Email already taken")
         _ -> text_response(409, "Conflict")
       }
-    dream_errors.Unavailable(..) -> text_response(503, "Service unavailable")
-    dream_errors.Timeout(..) -> text_response(504, "Timed out")
-    dream_errors.Invalid(..) | dream_errors.Failed(..) ->
-      text_response(500, "Internal server error")
+    Unavailable(..) -> text_response(503, "Service unavailable")
+    Timeout(..) -> text_response(504, "Timed out")
+    Invalid(..) | Failed(..) -> text_response(500, "Internal server error")
   }
 }
 ```

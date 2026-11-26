@@ -48,19 +48,16 @@ A hint is a comment line at the top of the file, before the statement: `-- key: 
 select id, email, nickname from users where id = $1
 ```
 
-#### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L83-L94"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of find.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L82-L90"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from find.sql.
-pub fn find(
-  db: client.Connection,
-  id: Int,
-) -> Result(User, dream_errors.Error(client.QueryError)) {
+pub fn find(db: Connection, id: Int) -> Result(User, Error(QueryError)) {
   "select id, email, nickname from users where id = $1"
-  |> client.query
-  |> client.parameter(client.int(id))
-  |> client.returning(user_decoder())
-  |> client.execute(db)
+  |> query
+  |> parameter(int(id))
+  |> returning(user_decoder())
+  |> execute(db)
   |> one_row("user.find", [])
 }
 ```
@@ -76,19 +73,19 @@ pub fn find(
 select id, email, nickname from users where email = $1
 ```
 
-#### The function of find_by_email.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L96-L107"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of find_by_email.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L92-L103"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from find_by_email.sql.
 pub fn find_by_email(
-  db: client.Connection,
+  db: Connection,
   email: String,
-) -> Result(Option(User), dream_errors.Error(client.QueryError)) {
+) -> Result(Option(User), Error(QueryError)) {
   "select id, email, nickname from users where email = $1"
-  |> client.query
-  |> client.parameter(client.text(email))
-  |> client.returning(user_decoder())
-  |> client.execute(db)
+  |> query
+  |> parameter(text(email))
+  |> returning(user_decoder())
+  |> execute(db)
   |> maybe_row("user.find_by_email", [])
 }
 ```
@@ -105,20 +102,20 @@ select id, user_id, title, body, published from posts
 where user_id = $1 order by id
 ```
 
-#### The function of by_user.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L48-L60"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of by_user.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L55-L67"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from by_user.sql.
 pub fn by_user(
-  db: client.Connection,
+  db: Connection,
   user_id: Int,
-) -> Result(List(Post), dream_errors.Error(client.QueryError)) {
+) -> Result(List(Post), Error(QueryError)) {
   "select id, user_id, title, body, published from posts
 where user_id = $1 order by id"
-  |> client.query
-  |> client.parameter(client.int(user_id))
-  |> client.returning(post_decoder())
-  |> client.execute(db)
+  |> query
+  |> parameter(int(user_id))
+  |> returning(post_decoder())
+  |> execute(db)
   |> many_rows("post.by_user", [])
 }
 ```
@@ -133,17 +130,15 @@ A file with no `returns` hint and with result columns gives `many`, with the typ
 select id, email, nickname from users order by id
 ```
 
-#### The function of list.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L109-L118"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of list.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L105-L112"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from list.sql.
-pub fn list(
-  db: client.Connection,
-) -> Result(List(User), dream_errors.Error(client.QueryError)) {
+pub fn list(db: Connection) -> Result(List(User), Error(QueryError)) {
   "select id, email, nickname from users order by id"
-  |> client.query
-  |> client.returning(user_decoder())
-  |> client.execute(db)
+  |> query
+  |> returning(user_decoder())
+  |> execute(db)
   |> many_rows("user.list", [])
 }
 ```
@@ -156,18 +151,15 @@ A file with no `returns` hint and no result columns gives `Nil`:
 delete from users where id = $1
 ```
 
-#### The function of delete.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L71-L81"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of delete.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L73-L80"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from delete.sql.
-pub fn delete(
-  db: client.Connection,
-  id: Int,
-) -> Result(Nil, dream_errors.Error(client.QueryError)) {
+pub fn delete(db: Connection, id: Int) -> Result(Nil, Error(QueryError)) {
   "delete from users where id = $1"
-  |> client.query
-  |> client.parameter(client.int(id))
-  |> client.execute(db)
+  |> query
+  |> parameter(int(id))
+  |> execute(db)
   |> no_rows("user.delete", [])
 }
 ```
@@ -183,20 +175,20 @@ pub fn delete(
 update users set nickname = $2 where id = $1
 ```
 
-#### The function of rename.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L120-L132"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of rename.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L114-L126"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from rename.sql.
 pub fn rename(
-  db: client.Connection,
+  db: Connection,
   id: Int,
   nickname: Option(String),
-) -> Result(Nil, dream_errors.Error(client.QueryError)) {
+) -> Result(Nil, Error(QueryError)) {
   "update users set nickname = $2 where id = $1"
-  |> client.query
-  |> client.parameter(client.int(id))
-  |> client.parameter(client.nullable(client.text, nickname))
-  |> client.execute(db)
+  |> query
+  |> parameter(int(id))
+  |> parameter(nullable(text, nickname))
+  |> execute(db)
   |> no_rows("user.rename", [])
 }
 ```
@@ -212,17 +204,15 @@ With no type name and one result column, `one`, `maybe` and `many` give the valu
 select count(*) as total from users
 ```
 
-#### The function of count.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L25-L34"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of count.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L32-L39"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from count.sql.
-pub fn count(
-  db: client.Connection,
-) -> Result(Int, dream_errors.Error(client.QueryError)) {
+pub fn count(db: Connection) -> Result(Int, Error(QueryError)) {
   "select count(*) as total from users"
-  |> client.query
-  |> client.returning(decode.at([0], decode.int))
-  |> client.execute(db)
+  |> query
+  |> returning(at([0], decode.int))
+  |> execute(db)
   |> one_row("user.count", [])
 }
 ```
@@ -234,19 +224,19 @@ pub fn count(
 update posts set published = true where id = $1 returning published
 ```
 
-#### The function of publish.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L80-L91"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of publish.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L87-L98"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from publish.sql.
 pub fn publish(
-  db: client.Connection,
+  db: Connection,
   id: Int,
-) -> Result(Option(Bool), dream_errors.Error(client.QueryError)) {
+) -> Result(Option(Bool), Error(QueryError)) {
   "update posts set published = true where id = $1 returning published"
-  |> client.query
-  |> client.parameter(client.int(id))
-  |> client.returning(decode.at([0], decode.bool))
-  |> client.execute(db)
+  |> query
+  |> parameter(int(id))
+  |> returning(at([0], decode.bool))
+  |> execute(db)
   |> maybe_row("post.publish", [])
 }
 ```
@@ -265,22 +255,22 @@ where posts.published = $1
 order by users.id
 ```
 
-#### The function of authors.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L32-L46"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### The function of authors.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L39-L53"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from authors.sql.
 pub fn authors(
-  db: client.Connection,
+  db: Connection,
   published: Bool,
-) -> Result(List(user.User), dream_errors.Error(client.QueryError)) {
+) -> Result(List(User), Error(QueryError)) {
   "select distinct users.id, users.email, users.nickname
 from users join posts on posts.user_id = users.id
 where posts.published = $1
 order by users.id"
-  |> client.query
-  |> client.parameter(client.bool(published))
-  |> client.returning(user_user_decoder())
-  |> client.execute(db)
+  |> query
+  |> parameter(bool(published))
+  |> returning(user_user_decoder())
+  |> execute(db)
   |> many_rows("post.authors", [])
 }
 ```
@@ -298,22 +288,22 @@ insert into users (email, nickname) values ($1, $2)
 returning id, email, nickname
 ```
 
-### The function of create.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L36-L50"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The function of create.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L41-L55"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from create.sql.
 pub fn create(
-  db: client.Connection,
+  db: Connection,
   email: String,
   nickname: Option(String),
-) -> Result(User, dream_errors.Error(client.QueryError)) {
+) -> Result(User, Error(QueryError)) {
   "insert into users (email, nickname) values ($1, $2)
 returning id, email, nickname"
-  |> client.query
-  |> client.parameter(client.text(email))
-  |> client.parameter(client.nullable(client.text, nickname))
-  |> client.returning(user_decoder())
-  |> client.execute(db)
+  |> query
+  |> parameter(text(email))
+  |> parameter(nullable(text, nickname))
+  |> returning(user_decoder())
+  |> execute(db)
   |> one_row("user.create", ["users_email_key"])
 }
 ```
@@ -343,26 +333,19 @@ PostgreSQL cannot tell if most computed values can be NULL. `not null: <column>`
 select sum(id)::int as total from posts where user_id = $1
 ```
 
-### The function of total.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L104-L122"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The function of total.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L111-L122"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from total.sql.
-pub fn total(
-  db: client.Connection,
-  user_id: Int,
-) -> Result(Int, dream_errors.Error(client.QueryError)) {
+pub fn total(db: Connection, user_id: Int) -> Result(Int, Error(QueryError)) {
   "select sum(id)::int as total from posts where user_id = $1"
-  |> client.query
-  |> client.parameter(client.int(user_id))
-  |> client.returning(decode.at(
+  |> query
+  |> parameter(int(user_id))
+  |> returning(at(
     [0],
-    client.promised_not_null(
-      decode.int,
-      "src/app/models/post/total.sql",
-      "total",
-    ),
+    promised_not_null(decode.int, "src/app/models/post/total.sql", "total"),
   ))
-  |> client.execute(db)
+  |> execute(db)
   |> one_row("post.total", [])
 }
 ```
@@ -383,26 +366,26 @@ PostgreSQL never forbids a NULL element in an array, so each element of an array
 select tags from samples where id = $1
 ```
 
-### The function of tags.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L176-L194"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The function of tags.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L177-L195"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from tags.sql.
 pub fn tags(
-  db: client.Connection,
+  db: Connection,
   id: Int,
-) -> Result(Option(List(String)), dream_errors.Error(client.QueryError)) {
+) -> Result(Option(List(String)), Error(QueryError)) {
   "select tags from samples where id = $1"
-  |> client.query
-  |> client.parameter(client.int(id))
-  |> client.returning(decode.at(
+  |> query
+  |> parameter(int(id))
+  |> returning(at(
     [0],
-    decode.optional(client.promised_elements_not_null(
-      decode.string,
+    optional(promised_elements_not_null(
+      string,
       "src/app/models/sample/tags.sql",
       "tags",
     )),
   ))
-  |> client.execute(db)
+  |> execute(db)
   |> one_row("sample.tags", [])
 }
 ```
@@ -429,17 +412,17 @@ dream_model refuses the hint, with the file and the line, when a name is not an 
 select title from posts order by id
 ```
 
-### The function of titles.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L93-L102"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The function of titles.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/post.gleam#L100-L109"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from titles.sql.
 pub fn titles(
-  db: client.Connection,
-) -> Result(List(Option(String)), dream_errors.Error(client.QueryError)) {
+  db: Connection,
+) -> Result(List(Option(String)), Error(QueryError)) {
   "select title from posts order by id"
-  |> client.query
-  |> client.returning(decode.at([0], decode.optional(decode.string)))
-  |> client.execute(db)
+  |> query
+  |> returning(at([0], optional(string)))
+  |> execute(db)
   |> many_rows("post.titles", [])
 }
 ```
@@ -458,23 +441,23 @@ where email like $1 and ($2::text is null or nickname = $2)
 order by id
 ```
 
-### The function of search.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L134-L149"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The function of search.sql <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L128-L143"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from search.sql.
 pub fn search(
-  db: client.Connection,
+  db: Connection,
   pattern: String,
   nickname: Option(String),
-) -> Result(List(User), dream_errors.Error(client.QueryError)) {
+) -> Result(List(User), Error(QueryError)) {
   "select id, email, nickname from users
 where email like $1 and ($2::text is null or nickname = $2)
 order by id"
-  |> client.query
-  |> client.parameter(client.text(pattern))
-  |> client.parameter(client.nullable(client.text, nickname))
-  |> client.returning(user_decoder())
-  |> client.execute(db)
+  |> query
+  |> parameter(text(pattern))
+  |> parameter(nullable(text, nickname))
+  |> returning(user_decoder())
+  |> execute(db)
   |> many_rows("user.search", [])
 }
 ```
@@ -488,6 +471,8 @@ A generated module defines and imports some names itself. dream_model refuses a 
 - **A type name**: a type or constructor of the Gleam prelude (`Bool`, `Int`, `Float`, `String`, `BitArray`, `UtfCodepoint`, `List`, `Result`, `Nil`, `True`, `False`, `Ok`, `Error`) or a name that the module imports (`Option`, `Some`, `None`). A model folder named `list`, `result`, `option` or `error` gives such a type name too.
 - **Two types with one decoder**: the decoder of a local type `UserUser` and the decoder of the imported type `user.User` are both `user_user_decoder`. Rename one of the types.
 - **A parameter name**: `db`, `client`, `decode`, a helper (`one_row`, `single_row`, `maybe_row`, `optional_row`, `many_rows`, `no_rows`, `query_error_to_error`, `unique_violation`, `schema_fingerprint`), or a name that ends in `_decoder`.
+
+The module imports each other name that it uses with no module, for example `query`, `parameter` and `NotFound`. A name from SQL can be the same as one of these names, for example the function `query` of a file `query.sql`, a parameter `int` or a field `field`. dream_model accepts it. The module then writes that imported name with its module, for example `client.query`, so the module compiles. When two imports give the same name, `dream_postgres/client` keeps the bare name. Thus `client.int` is `int`, and `decode.int` keeps its module.
 
 ### A type name of an import <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/test/snippets/hints/reserved_type.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 

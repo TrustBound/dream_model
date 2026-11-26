@@ -37,7 +37,12 @@ fn copy_of(version: Int) -> String {
 
 const url_variable = "MODEL_APP_DATABASE_URL"
 
-const modules = ["post", "sample", "user"]
+/// The model `clash` holds names that are the same as names that a
+/// generated module imports: the functions `parameter` and `returning`,
+/// the parameter `int`, the type `Connection` and the fields `field` and
+/// `success`. The generator keeps the module of each of these imports, and
+/// the test that compiles the app proves that the module compiles.
+const modules = ["clash", "post", "sample", "user"]
 
 @external(erlang, "dream_model_test_ffi", "run")
 fn run_program(
@@ -71,11 +76,11 @@ pub fn tests(version: Int) -> TestSuite {
           |> should
           |> be_equal(Outcome(
             1,
-            "missing src/app/models/post.gleam\nmissing src/app/models/sample.gleam\nmissing src/app/models/user.gleam\nRun `gleam run -m dream_model` to write the modules again.\n",
+            "missing src/app/models/clash.gleam\nmissing src/app/models/post.gleam\nmissing src/app/models/sample.gleam\nmissing src/app/models/user.gleam\nRun `gleam run -m dream_model` to write the modules again.\n",
           ))
-          |> or_fail_with("Expected three missing modules")
+          |> or_fail_with("Expected four missing modules")
         }),
-        it("writes the three modules", fn() {
+        it("writes the four modules", fn() {
           // Act
           let outcome = command.run([], copy, read_environment_variable)
 
@@ -84,9 +89,9 @@ pub fn tests(version: Int) -> TestSuite {
           |> should
           |> be_equal(Outcome(
             0,
-            "wrote src/app/models/post.gleam\nwrote src/app/models/sample.gleam\nwrote src/app/models/user.gleam\n",
+            "wrote src/app/models/clash.gleam\nwrote src/app/models/post.gleam\nwrote src/app/models/sample.gleam\nwrote src/app/models/user.gleam\n",
           ))
-          |> or_fail_with("Expected three written modules")
+          |> or_fail_with("Expected four written modules")
         }),
       ],
       list.map(modules, fn(module) {
@@ -117,7 +122,7 @@ pub fn tests(version: Int) -> TestSuite {
           |> should
           |> be_equal(Outcome(
             0,
-            "every model module matches its .sql files (3 modules)\n",
+            "every model module matches its .sql files (4 modules)\n",
           ))
           |> or_fail_with("Expected every module to match")
         }),
@@ -149,11 +154,11 @@ pub fn tests(version: Int) -> TestSuite {
             ])
 
           // Assert
-          #(status, last_lines(output, 3))
+          #(status, last_lines(output, 4))
           |> should
           |> be_equal(#(
             0,
-            "unchanged src/app/models/post.gleam\nunchanged src/app/models/sample.gleam\nunchanged src/app/models/user.gleam\n",
+            "unchanged src/app/models/clash.gleam\nunchanged src/app/models/post.gleam\nunchanged src/app/models/sample.gleam\nunchanged src/app/models/user.gleam\n",
           ))
           |> or_fail_with(output)
         }),
@@ -169,7 +174,7 @@ pub fn tests(version: Int) -> TestSuite {
           |> should
           |> be_equal(#(
             0,
-            "every model module matches its .sql files (3 modules)\n",
+            "every model module matches its .sql files (4 modules)\n",
           ))
           |> or_fail_with(output)
         }),

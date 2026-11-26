@@ -3,20 +3,23 @@
 //// starting with `| `. The tests of dream_model compare the lines with
 //// expected_output.txt.
 
-import app/controllers/user_controller
+import app/controllers/user_controller.{create}
 import app/models/post
 import app/models/sample
 import app/models/user
 import app/startup
 import dream/http/response
-import dream_errors
-import dream_postgres/client
+import dream_errors.{type Error, kind_name}
+import dream_postgres/client.{
+  type Connection, type QueryError, execute, from_url, query,
+  violated_constraint,
+}
 import gleam/int
 import gleam/io
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import gleam/string
+import gleam/string.{inspect, split, split_once}
 import gleam/time/calendar
 import gleam/time/timestamp
 
@@ -25,7 +28,7 @@ fn get_env(name: String) -> Result(String, Nil)
 
 pub fn main() -> Nil {
   let assert Ok(url) = get_env("MODEL_APP_DATABASE_URL")
-  let assert Ok(db) = client.from_url(url)
+  let assert Ok(db) = from_url(url)
   show("startup.check_models", startup.check_models(db))
   check_users(db)
   show_response("user_controller.show", user_controller.show(db, 1))
@@ -35,7 +38,7 @@ pub fn main() -> Nil {
   )
   show_response(
     "user_controller.create of a taken email",
-    user_controller.create(db, "ann@example.com"),
+    create(db, "ann@example.com"),
   )
   check_posts(db)
   check_samples(db)
@@ -50,11 +53,11 @@ pub fn main() -> Nil {
 /// The first line of a message. The other lines hold fingerprints, which
 /// are different on each PostgreSQL version.
 fn first_line(message: String) -> String {
-  string.split(message, "\n") |> list.first |> result.unwrap(message)
+  split(message, "\n") |> list.first |> result.unwrap(message)
 }
 
 fn show(label: String, value: a) -> Nil {
-  io.println("| " <> label <> ": " <> string.inspect(value))
+  io.println("| " <> label <> ": " <> inspect(value))
 }
 
 fn show_response(label: String, found: response.Response) -> Nil {
@@ -64,23 +67,20 @@ fn show_response(label: String, found: response.Response) -> Nil {
     <> ": "
     <> int.to_string(found.status)
     <> " "
-    <> string.inspect(found.body),
+    <> inspect(found.body),
   )
 }
 
 /// Shows the error of a model function as data: its kind, its message and
 /// the kind of its cause. The cause of a `Conflict` also shows the name of
-/// its constraint, from `client.violated_constraint`. The details of a
+/// its constraint, from `violated_constraint`. The details of a
 /// cause can differ between PostgreSQL versions, so only its constructor
 /// shows.
-fn show_error(
-  label: String,
-  value: Result(a, dream_errors.Error(client.QueryError)),
-) -> Nil {
+fn show_error(label: String, value: Result(a, Error(QueryError))) -> Nil {
   let text = case value {
-    Ok(found) -> "Ok " <> string.inspect(found)
+    Ok(found) -> "Ok " <> inspect(found)
     Error(error) ->
-      dream_errors.kind_name(error)
+      kind_name(error)
       <> " "
       <> dream_errors.message(error)
       <> cause_text(dream_errors.cause(error))
@@ -88,11 +88,11 @@ fn show_error(
   io.println("| " <> label <> ": " <> text)
 }
 
-fn cause_text(cause: Option(client.QueryError)) -> String {
+fn cause_text(cause: Option(QueryError)) -> String {
   case cause {
     None -> ""
     Some(cause) ->
-      case client.violated_constraint(cause) {
+      case violated_constraint(cause) {
         Ok(constraint) ->
           " (cause: " <> cause_kind(cause) <> " of " <> constraint <> ")"
         Error(Nil) -> " (cause: " <> cause_kind(cause) <> ")"
@@ -100,15 +100,15 @@ fn cause_text(cause: Option(client.QueryError)) -> String {
   }
 }
 
-fn cause_kind(cause: client.QueryError) -> String {
-  let text = string.inspect(cause)
-  case string.split_once(text, "(") {
+fn cause_kind(cause: QueryError) -> String {
+  let text = inspect(cause)
+  case split_once(text, "(") {
     Ok(#(kind, _)) -> kind
     Error(Nil) -> text
   }
 }
 
-fn check_users(db: client.Connection) -> Nil {
+fn check_users(db: Connection) -> Nil {
   show("user.create", user.create(db, "ann@example.com", Some("Ann")))
   show_error(
     "user.create of a taken email",
@@ -141,7 +141,7 @@ fn check_users(db: client.Connection) -> Nil {
   show_error("user.find after delete", user.find(db, 3))
 }
 
-fn check_posts(db: client.Connection) -> Nil {
+fn check_posts(db: Connection) -> Nil {
   show("post.create", post.create(db, 1, "Hello", None))
   show("post.publish", post.publish(db, 1))
   show("post.publish of a missing post", post.publish(db, 99))
@@ -154,7 +154,7 @@ fn check_posts(db: client.Connection) -> Nil {
 
 /// Stores infinity in a row, and shows the error of sample.get for each
 /// time column that holds it.
-fn check_infinity(db: client.Connection) -> Nil {
+fn check_infinity(db: Connection) -> Nil {
   run(db, "update samples set happened_at = 'infinity' where id = 1")
   show_error("sample.get of an infinite timestamp", sample.get(db, 1))
   run(
@@ -172,7 +172,7 @@ fn check_infinity(db: client.Connection) -> Nil {
 
 /// Sends each numeric text to PostgreSQL and reads it back: the text must
 /// come back exactly, with its scale and its trailing zeros.
-fn check_numeric(db: client.Connection) -> Nil {
+fn check_numeric(db: Connection) -> Nil {
   [
     "1.50", "123456789012345678901234567890.123456789012345678901234567890",
     "0.000000000000000000000000000000000000000000000000001", "-42.10", "NaN",
@@ -202,7 +202,7 @@ fn check_numeric(db: client.Connection) -> Nil {
 
 /// Reads the tags of row 1 with the promise that no element is NULL: first
 /// with a NULL element, then with none, then with no array.
-fn check_element_promise(db: client.Connection) -> Nil {
+fn check_element_promise(db: Connection) -> Nil {
   show_error("sample.tags with a NULL element", sample.tags(db, 1))
   run(db, "update samples set tags = '{a,b}' where id = 1")
   show("sample.tags with no NULL element", sample.tags(db, 1))
@@ -210,15 +210,15 @@ fn check_element_promise(db: client.Connection) -> Nil {
   show("sample.tags of a NULL array", sample.tags(db, 1))
 }
 
-fn run(db: client.Connection, sql: String) -> Nil {
+fn run(db: Connection, sql: String) -> Nil {
   let assert Ok(_) =
     sql
-    |> client.query
-    |> client.execute(db)
+    |> query
+    |> execute(db)
   Nil
 }
 
-fn check_samples(db: client.Connection) -> Nil {
+fn check_samples(db: Connection) -> Nil {
   let happened_at =
     timestamp.from_calendar(
       calendar.Date(2024, calendar.February, 29),

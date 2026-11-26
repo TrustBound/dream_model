@@ -66,7 +66,7 @@ create table samples (
 );
 ```
 
-### The type of a samples row <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L19-L47"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The type of a samples row <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L32-L60"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// A row of get.sql.
@@ -89,10 +89,10 @@ pub type Sample {
     flag: Option(Bool),
     data: Option(BitArray),
     identifier: Option(BitArray),
-    happened_at: Option(client.Timestamp),
-    happened_at_zone: Option(client.Timestamp),
-    day: Option(client.Date),
-    clock: Option(client.TimeOfDay),
+    happened_at: Option(Timestamp),
+    happened_at_zone: Option(Timestamp),
+    day: Option(Date),
+    clock: Option(TimeOfDay),
     tags: Option(List(Option(String))),
     scores: Option(List(Option(Int))),
     rating: Option(Int),
@@ -115,27 +115,27 @@ This applies to a result column, to a parameter, to an element of an array, and 
 select $1::numeric as exact
 ```
 
-### The generated function <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L66-L85"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The generated function <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L76-L95"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from echo_amount.sql.
 pub fn echo_amount(
-  db: client.Connection,
+  db: Connection,
   amount: String,
-) -> Result(String, dream_errors.Error(client.QueryError)) {
+) -> Result(String, Error(QueryError)) {
   "select $1::numeric as exact"
-  |> client.query
-  |> client.parameter(client.numeric_text(amount))
-  |> client.numeric_as_text
-  |> client.returning(decode.at(
+  |> query
+  |> parameter(numeric_text(amount))
+  |> numeric_as_text
+  |> returning(at(
     [0],
-    client.promised_not_null(
-      client.numeric_text_decoder(),
+    promised_not_null(
+      numeric_text_decoder(),
       "src/app/models/sample/echo_amount.sql",
       "exact",
     ),
   ))
-  |> client.execute(db)
+  |> execute(db)
   |> one_row("sample.echo_amount", [])
 }
 ```
@@ -172,23 +172,20 @@ Cast a text array in the SQL. The parameter is then a `text[]`, so the function 
 select $1::text[]::numeric[] as amounts
 ```
 
-### The generated function of the cast <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L49-L64"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The generated function of the cast <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L62-L74"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from amounts.sql.
 pub fn amounts(
-  db: client.Connection,
+  db: Connection,
   amounts: List(Option(String)),
-) -> Result(Option(List(Option(String))), dream_errors.Error(client.QueryError)) {
+) -> Result(Option(List(Option(String))), Error(QueryError)) {
   "select $1::text[]::numeric[] as amounts"
-  |> client.query
-  |> client.parameter(client.array(client.nullable(client.text, _), amounts))
-  |> client.numeric_as_text
-  |> client.returning(decode.at(
-    [0],
-    decode.optional(decode.list(decode.optional(client.numeric_text_decoder()))),
-  ))
-  |> client.execute(db)
+  |> query
+  |> parameter(array(nullable(text, _), amounts))
+  |> numeric_as_text
+  |> returning(at([0], optional(list(optional(numeric_text_decoder())))))
+  |> execute(db)
   |> one_row("sample.amounts", [])
 }
 ```
@@ -205,22 +202,16 @@ The cast takes the parameter out of a store, so dream_model cannot name it from 
 
 PostgreSQL never forbids a NULL element in an array. A NOT NULL constraint on an array column forbids only a NULL array. So each element of a `List` is an `Option`. An array column that can be NULL is `Option(List(Option(T)))`.
 
-### Read an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L236-L239"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Read an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L228"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-  use tags <- decode.field(
-    21,
-    decode.optional(decode.list(decode.optional(decode.string))),
-  )
+  use tags <- field(21, optional(list(optional(string))))
 ```
 
-### Send an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L162-L165"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Send an array <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L169"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-  |> client.parameter(client.nullable(
-    client.array(client.nullable(client.text, _), _),
-    tags,
-  ))
+  |> parameter(nullable(array(nullable(text, _), _), tags))
 ```
 
 The end-to-end app stores `["a", NULL]` and reads it back:
@@ -241,26 +232,26 @@ To get `List(String)`, promise that the elements are never NULL with the `-- not
 select tags from samples where id = $1
 ```
 
-### The generated function of the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L176-L194"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The generated function of the promise <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/sample.gleam#L177-L195"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Generated from tags.sql.
 pub fn tags(
-  db: client.Connection,
+  db: Connection,
   id: Int,
-) -> Result(Option(List(String)), dream_errors.Error(client.QueryError)) {
+) -> Result(Option(List(String)), Error(QueryError)) {
   "select tags from samples where id = $1"
-  |> client.query
-  |> client.parameter(client.int(id))
-  |> client.returning(decode.at(
+  |> query
+  |> parameter(int(id))
+  |> returning(at(
     [0],
-    decode.optional(client.promised_elements_not_null(
-      decode.string,
+    optional(promised_elements_not_null(
+      string,
       "src/app/models/sample/tags.sql",
       "tags",
     )),
   ))
-  |> client.execute(db)
+  |> execute(db)
   |> one_row("sample.tags", [])
 }
 ```

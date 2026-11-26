@@ -36,31 +36,29 @@ The outputs in this guide come from the end-to-end app of dream_model. It prints
 
 Each generated module maps a query error with the same helper. `client.to_error` tells a timeout and a lost connection apart from the other errors:
 
-### The error helper of a generated module <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L232-L255"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The error helper of a generated module <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L226-L247"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 fn query_error_to_error(
-  query_error: client.QueryError,
+  query_error: QueryError,
   query_name: String,
   unique: List(String),
-) -> dream_errors.Error(client.QueryError) {
-  let conflict =
-    unique_violation(client.violated_constraint(query_error), unique)
-  let promise = client.broken_promise(query_error)
-  let infinite = client.infinite_value(query_error)
-  let shared = client.to_error(query_error)
+) -> Error(QueryError) {
+  let conflict = unique_violation(violated_constraint(query_error), unique)
+  let promise = broken_promise(query_error)
+  let infinite = infinite_value(query_error)
+  let shared = to_error(query_error)
   let described = query_name <> ": " <> dream_errors.message(shared)
   case conflict, promise, infinite, shared {
-    Ok(_), _, _, _ -> dream_errors.Conflict(described, query_error)
-    Error(Nil), Ok(message), _, _ -> dream_errors.Failed(message, query_error)
+    Ok(_), _, _, _ -> Conflict(described, query_error)
+    Error(Nil), Ok(message), _, _ -> Failed(message, query_error)
     Error(Nil), Error(Nil), Ok(message), _ ->
-      dream_errors.Failed(query_name <> ": " <> message, query_error)
-    Error(Nil), Error(Nil), Error(Nil), dream_errors.Timeout(..) ->
-      dream_errors.Timeout(described, query_error)
-    Error(Nil), Error(Nil), Error(Nil), dream_errors.Unavailable(..) ->
-      dream_errors.Unavailable(described, query_error)
-    Error(Nil), Error(Nil), Error(Nil), _ ->
-      dream_errors.Failed(described, query_error)
+      Failed(query_name <> ": " <> message, query_error)
+    Error(Nil), Error(Nil), Error(Nil), Timeout(..) ->
+      Timeout(described, query_error)
+    Error(Nil), Error(Nil), Error(Nil), Unavailable(..) ->
+      Unavailable(described, query_error)
+    Error(Nil), Error(Nil), Error(Nil), _ -> Failed(described, query_error)
   }
 }
 ```
@@ -69,20 +67,20 @@ fn query_error_to_error(
 
 `returns: one` gives `NotFound` when the statement gives no row. The message names the function: the controller writes the text for the user, for example `User not found`. `returns: maybe` gives `Ok(None)`, and `returns: many` gives `Ok([])`.
 
-### The row helper of returns: one <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L170-L183"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The row helper of returns: one <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L164-L177"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 fn single_row(
-  returned: client.Returned(row),
+  returned: Returned(row),
   query_name: String,
-) -> Result(row, dream_errors.Error(client.QueryError)) {
+) -> Result(row, Error(QueryError)) {
   case returned.rows {
     [row] -> Ok(row)
-    [] -> Error(dream_errors.NotFound(query_name <> " found no row"))
+    [] -> Error(NotFound(query_name <> " found no row"))
     _ ->
-      Error(dream_errors.Failed(
+      Error(Failed(
         query_name <> " returned more than one row",
-        client.more_than_one_row(returned.count),
+        more_than_one_row(returned.count),
       ))
   }
 }
@@ -170,13 +168,13 @@ A timeout gives `Timeout`, and a pool with no free connection gives `Unavailable
 
 The controller matches each case of the error and picks the status and the text. It reads the constraint of a `Conflict` from the cause, and it sends no message of an error:
 
-### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L12-L46"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Answer with the user or the error <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/controllers/user_controller.gleam#L16-L49"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 /// Answers with the email of the user, or with the status and the text of
 /// the error.
-pub fn show(db: client.Connection, id: Int) -> Response {
-  case user.find(db, id) {
+pub fn show(db: Connection, id: Int) -> Response {
+  case find(db, id) {
     Ok(found) -> text_response(200, found.email)
     Error(error) -> error_response(error)
   }
@@ -184,7 +182,7 @@ pub fn show(db: client.Connection, id: Int) -> Response {
 
 /// Creates a user and answers with the email, or with a 409 when the email
 /// is taken.
-pub fn create(db: client.Connection, email: String) -> Response {
+pub fn create(db: Connection, email: String) -> Response {
   case user.create(db, email, None) {
     Ok(created) -> text_response(201, created.email)
     Error(error) -> error_response(error)
@@ -192,20 +190,19 @@ pub fn create(db: client.Connection, email: String) -> Response {
 }
 
 /// The status and the text of each model error. The cause of a `Conflict`
-/// is the error of the database, and `client.violated_constraint` gives
+/// is the error of the database, and `violated_constraint` gives
 /// the name of its constraint.
-fn error_response(error: dream_errors.Error(client.QueryError)) -> Response {
+fn error_response(error: Error(QueryError)) -> Response {
   case error {
-    dream_errors.NotFound(..) -> text_response(404, "User not found")
-    dream_errors.Conflict(cause:, ..) ->
-      case client.violated_constraint(cause) {
+    NotFound(..) -> text_response(404, "User not found")
+    Conflict(cause:, ..) ->
+      case violated_constraint(cause) {
         Ok("users_email_key") -> text_response(409, "Email already taken")
         _ -> text_response(409, "Conflict")
       }
-    dream_errors.Unavailable(..) -> text_response(503, "Service unavailable")
-    dream_errors.Timeout(..) -> text_response(504, "Timed out")
-    dream_errors.Invalid(..) | dream_errors.Failed(..) ->
-      text_response(500, "Internal server error")
+    Unavailable(..) -> text_response(503, "Service unavailable")
+    Timeout(..) -> text_response(504, "Timed out")
+    Invalid(..) | Failed(..) -> text_response(500, "Internal server error")
   }
 }
 ```

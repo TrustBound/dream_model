@@ -47,19 +47,16 @@
 //// The generated function of `find.sql` reads one `User`, or gives
 //// `dream_errors.NotFound`:
 ////
-//// ### The generated function <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L83-L94"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+//// ### The generated function <a href="https://github.com/TrustBound/dream_model/blob/1.0.0/e2e/model_app/src/app/models/user.gleam#L82-L90"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
 //// /// Generated from find.sql.
-//// pub fn find(
-////   db: client.Connection,
-////   id: Int,
-//// ) -> Result(User, dream_errors.Error(client.QueryError)) {
+//// pub fn find(db: Connection, id: Int) -> Result(User, Error(QueryError)) {
 ////   "select id, email, nickname from users where id = $1"
-////   |> client.query
-////   |> client.parameter(client.int(id))
-////   |> client.returning(user_decoder())
-////   |> client.execute(db)
+////   |> query
+////   |> parameter(int(id))
+////   |> returning(user_decoder())
+////   |> execute(db)
 ////   |> one_row("user.find", [])
 //// }
 //// ```

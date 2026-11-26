@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code imports `dream_errors` and `dream_postgres/client`, so the app
   needs both as dependencies. The controllers of the app pick the status
   and the text of each error.
+- The generated code imports each type, constructor and function that it
+  uses with no module, for example `query` and `NotFound`. A name keeps its
+  module only when the bare name is the same as a name from SQL, a name of
+  the module, or a name of another import.
 - `gleam run -m dream_model -- --check` writes nothing, and exits with
   status 1 when a module is missing or differs from its `.sql` files.
 - The NULL rules: a column or a parameter is `Option` only when it can be

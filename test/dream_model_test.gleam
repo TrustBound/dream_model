@@ -38,6 +38,7 @@ import dream_model/generator/model_test
 import dream_model/generator/name_test
 import dream_model/generator/query_hint_test
 import dream_model/generator/query_test
+import dream_model/generator/unqualified_test
 import dream_model/nullability/attack_test
 import dream_model/nullability/hint_test
 import dream_model/nullability/reason_test
@@ -93,6 +94,7 @@ fn entries() -> List(Entry) {
     Unit("hint_test", fn(_) { hint_test.tests() }),
     Unit("query_hint_test", fn(_) { query_hint_test.tests() }),
     Unit("name_test", fn(_) { name_test.tests() }),
+    Unit("unqualified_test", fn(_) { unqualified_test.tests() }),
     Unit("reason_test", fn(_) { reason_test.tests() }),
     Unit("command_test", fn(_) { command_test.unit_tests() }),
     Unit("wire_test", wire_test.tests),
