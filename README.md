@@ -20,7 +20,7 @@
 
 ## What is Dream Model?
 
-Dream Model writes the model modules of a Dream app from your SQL. You write one `.sql` file for each query, and it checks each statement against your PostgreSQL database and writes one typed Gleam module with a function for each file. A column is an `Option` only when PostgreSQL can return NULL for it, and every failure comes back as data for your controller to map to a response. It runs at development time, so your app does not run it.
+Dream Model writes the database layer of any Gleam app from your SQL. You write one `.sql` file for each query, and it checks each statement against your PostgreSQL database and writes one typed Gleam module with a function for each file. A column is an `Option` only when PostgreSQL can return NULL for it, and every failure comes back as a Dream Errors value your app can match on. It runs at development time, so your app does not run it.
 
 ## Features
 
@@ -89,7 +89,7 @@ The generated modules import `dream_postgres` and `dream_errors`, so the app nee
 
 ## Guides
 
-- [Getting started](https://github.com/TrustBound/dream_model/blob/main/docs/guides/getting-started.md): write the `.sql` files of a model, generate its module, call it from a controller and check the schema at start-up
+- [Getting started](https://github.com/TrustBound/dream_model/blob/main/docs/guides/getting-started.md): write the `.sql` files of a model, generate its module, call it from your app and check the schema at start-up
 - [Hints](https://github.com/TrustBound/dream_model/blob/main/docs/guides/hints.md): every hint, with a real example and the code that it gives
 - [Why is this column Option?](https://github.com/TrustBound/dream_model/blob/main/docs/guides/why-option.md): each reason the generator gives, with an example query and what to do
 - [Types](https://github.com/TrustBound/dream_model/blob/main/docs/guides/types.md): the Gleam type of each PostgreSQL type, exact numbers, arrays, infinity and the types that need a cast
@@ -103,7 +103,7 @@ The generated modules import `dream_postgres` and `dream_errors`, so the app nee
 - Gleam 1.19.2 or newer, with the `gleam` program on the `PATH` to format the modules.
 - Erlang/OTP 28 (the version CI uses).
 - PostgreSQL 16, 17, 18 or 19. Dream Model refuses PostgreSQL 15 and older.
-- `dream` 3.0.0 or newer, `dream_postgres` 2.1.0 or newer and `dream_errors` 1.0.0 or newer in the app.
+- `dream_postgres` 2.1.0 or newer and `dream_errors` 1.0.0 or newer in the app, because the generated modules use them.
 
 ## About Dream
 
