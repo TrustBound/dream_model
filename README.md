@@ -170,7 +170,9 @@ fn error_response(error: Error(QueryError)) -> Response {
 
 ## About Dream
 
-dream_model is part of [Dream](https://github.com/TrustBound/dream), a web toolkit for Gleam. It is built with the same quality standards as Dream, but your app does not need it at run time.
+[Dream](https://github.com/TrustBound/dream) is a collection of Gleam packages for building production web applications. Each package implements its standards completely, shares the same naming and style as the others, and is fully tested. TrustBound builds Dream for its own production systems and shares it in the hope that it helps yours.
+
+dream_model works on its own. You don't need the rest of Dream to use it.
 
 ## Contributing
 
