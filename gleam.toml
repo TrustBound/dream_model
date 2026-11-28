@@ -1,6 +1,6 @@
 name = "dream_model"
 version = "1.0.0"
-description = "Generate typed Gleam models with Dream errors from PostgreSQL .sql files"
+description = "Typed PostgreSQL models for Gleam, written from your SQL files"
 licences = ["Apache-2.0"]
 gleam = ">= 1.19.2"
 repository = { type = "github", user = "TrustBound", repo = "dream_model" }
